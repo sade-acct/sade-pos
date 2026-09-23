@@ -1,0 +1,2272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sade POS</title>
+<meta name="theme-color" content="#f3f2f1">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --espresso:#f3f3f3;
+    --espresso-2:#ffffff;
+    --crema:#605e5c;
+    --crema-dim:#8a8886;
+    --copper:#0078d4;
+    --copper-light:#106ebe;
+    --paper:#1b1b1b;
+    --paper-dim:#484644;
+    --ok:#107c10;
+    --err:#d13438;
+    --line: #e1dfdd;
+    --accent-text: #ffffff;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.07), 0 1px 1px rgba(0,0,0,.05);
+    --shadow-md: 0 3.2px 7.2px rgba(0,0,0,.11), 0 0.6px 1.8px rgba(0,0,0,.09);
+    --shadow-lg: 0 6.4px 14.4px rgba(0,0,0,.13), 0 1.2px 3.6px rgba(0,0,0,.10);
+    --numpad-width: 300px;
+    --cart-width: 340px;
+    --canvas-height: clamp(420px, 62vh, 680px);
+    --btn-width: 110px;
+    --btn-height: 95px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--espresso);
+    color:var(--paper);
+    font-family:'Segoe UI Variable Text','Segoe UI','Inter',system-ui,sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.display{
+    font-family:'Segoe UI Variable Display','Segoe UI','Inter',system-ui,sans-serif;
+    font-weight:600;
+    letter-spacing:-0.01em;
+    margin:0;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+  #app{min-height:100vh; display:flex; flex-direction:column;}
+
+  /* ---------- generic ---------- */
+  .btn{
+    font-family:inherit;
+    font-weight:600;
+    font-size:14px;
+    padding:10px 18px;
+    border-radius:6px;
+    border:1px solid transparent;
+    cursor:pointer;
+    transition:transform .08s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+  .btn:active{transform:scale(0.97);}
+  .btn-primary{background:var(--copper); color:var(--accent-text); box-shadow:var(--shadow-sm);}
+  .btn-primary:hover{background:var(--copper-light); box-shadow:var(--shadow-md);}
+  .btn-outline{background:var(--espresso-2); color:var(--paper); border-color:var(--line); box-shadow:var(--shadow-sm);}
+  .btn-outline:hover{border-color:var(--crema-dim); box-shadow:var(--shadow-md);}
+  .btn-danger{background:transparent; color:var(--err); border-color:rgba(209,52,56,0.4);}
+  .btn-danger:hover{background:rgba(209,52,56,0.08);}
+  .btn-block{width:100%;}
+  .btn:disabled{opacity:0.4; cursor:not-allowed;}
+  input,select,textarea{
+    font-family:inherit;
+    font-size:14px;
+    background:var(--espresso-2);
+    border:1px solid var(--line);
+    color:var(--paper);
+    padding:10px 12px;
+    border-radius:6px;
+    width:100%;
+    outline:none;
+  }
+  textarea{resize:vertical; min-height:60px; font-family:inherit;}
+  input:focus,select:focus,textarea:focus{border-color:var(--copper); box-shadow:0 0 0 1px var(--copper);}
+  label{font-size:12px; color:var(--crema-dim); display:block; margin-bottom:5px;}
+  .field{margin-bottom:14px;}
+  .card{
+    background:var(--espresso-2);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:18px;
+    box-shadow:var(--shadow-sm);
+  }
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:11px; font-weight:600; letter-spacing:.02em;
+    padding:4px 10px; border-radius:20px;
+    border:1px solid var(--line); color:var(--crema-dim); background:var(--espresso-2);
+  }
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--crema-dim);}
+  .dot.live{background:var(--ok); box-shadow:0 0 0 0 rgba(122,154,108,.6); animation:pulse 2s infinite;}
+  .dot.offline{background:var(--err);}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(122,154,108,.55);}
+    70%{box-shadow:0 0 0 6px rgba(122,154,108,0);}
+    100%{box-shadow:0 0 0 0 rgba(122,154,108,0);}
+  }
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:var(--espresso-2); border:1px solid var(--line); color:var(--paper);
+    padding:11px 18px; border-radius:8px; font-size:13px; z-index:999;
+    box-shadow:0 8px 24px rgba(0,0,0,.4); max-width:90vw; text-align:center;
+  }
+  .toast.err{border-color:rgba(181,69,58,.5); color:#f0b8b2;}
+  .toast.ok{border-color:rgba(122,154,108,.5); color:#cfe3c6;}
+  a.link{color:var(--copper-light); cursor:pointer; text-decoration:none; font-size:13px;}
+  a.link:hover{text-decoration:underline;}
+  .hr{border:none; border-top:1px dashed var(--paper-dim); opacity:.25; margin:14px 0;}
+  ::-webkit-scrollbar{width:9px; height:9px;}
+  ::-webkit-scrollbar-thumb{background:var(--espresso-2); border-radius:6px;}
+
+  /* ---------- centered screens (connect / login / setup) ---------- */
+  .center-screen{
+    flex:1; display:flex; align-items:center; justify-content:center; padding:24px;
+    background:
+      radial-gradient(circle at 15% 10%, rgba(181,101,47,0.14), transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(233,201,150,0.08), transparent 45%);
+  }
+  .panel{width:100%; max-width:380px;}
+  .brand{display:flex; align-items:center; gap:10px; margin-bottom:26px;}
+  .brand .mark{
+    width:38px;height:38px;border-radius:6px;background:var(--copper);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:700; color:var(--accent-text); font-size:18px; overflow:hidden;
+  }
+  .brand .mark img{width:100%; height:100%; object-fit:cover;}
+  .brand .name{font-size:19px;}
+  .brand .sub{font-size:11px; color:var(--crema-dim); letter-spacing:.03em;}
+
+  /* ---------- shell (logged-in layout) ---------- */
+  .shell{flex:1; display:flex; flex-direction:column; min-height:100vh;}
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px; border-bottom:1px solid var(--line);
+    background:var(--espresso-2); flex-wrap:wrap; gap:10px;
+    box-shadow:var(--shadow-sm);
+  }
+  .topbar .left{display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  .topbar .who{font-size:13px; color:var(--crema-dim);}
+  .topbar .who b{color:var(--paper);}
+  .topbar .actions{display:flex; align-items:center; gap:14px;}
+  .role-tag{
+    font-size:10px; font-weight:700; letter-spacing:.06em; padding:3px 9px; border-radius:4px;
+    background:var(--copper); color:var(--accent-text);
+  }
+  .main{flex:1; padding:22px; max-width:1400px; width:100%; margin:0 auto;}
+  .main.main-full{max-width:100%;}
+
+  /* ---------- POS (cashier) ---------- */
+  .pos-layout{display:grid; grid-template-columns:1fr var(--numpad-width) var(--cart-width); gap:18px; align-items:start;}
+  @media(max-width:1150px){.pos-layout{grid-template-columns:1fr; }}
+  .product-grid{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(clamp(96px,11vw,130px),1fr)); gap:10px;
+  }
+  .product-btn{
+    aspect-ratio:1/0.85; border-radius:6px; border:1px solid var(--line);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    cursor:pointer; padding:10px; text-align:center; background:var(--espresso-2);
+    transition:transform .08s ease, border-color .15s ease, box-shadow .15s ease;
+    box-shadow:var(--shadow-sm);
+  }
+  .product-btn:hover{box-shadow:var(--shadow-md);}
+  .product-btn:active{transform:scale(0.95);}
+  .product-btn .emoji{font-size:26px;}
+  .product-btn .pname{font-size:12.5px; font-weight:600; line-height:1.25;}
+  .product-btn .pprice{font-size:11px; color:var(--crema-dim);}
+  .product-btn .pcat{font-size:9px; color:var(--crema-dim); opacity:.7;}
+  .product-btn.numpad-tile{border-style:dashed;}
+  .cart-panel{
+    background:var(--espresso-2); border:1px solid var(--line); border-radius:8px;
+    display:flex; flex-direction:column; max-height:calc(100vh - 130px); position:sticky; top:18px;
+    box-shadow:var(--shadow-md);
+  }
+  .cart-head{padding:14px 16px; border-bottom:1px solid var(--line);}
+  .cart-head h3{opacity:1;}
+  .cart-items{flex:1; overflow-y:auto; padding:8px 16px;}
+  .cart-row{display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--line);}
+  .cart-row:last-child{border-bottom:none;}
+  .cart-row .ci-name{font-size:13.5px; font-weight:500;}
+  .cart-row .ci-meta{font-size:11px; color:var(--crema-dim);}
+  .qty-ctrl{display:flex; align-items:center; gap:8px;}
+  .qty-ctrl button{
+    width:29px;height:44px; border-radius:4px; border:1px solid var(--line); background:transparent;
+    color:var(--paper); cursor:pointer; font-size:17px; line-height:1;
+  }
+  .cart-foot{padding:14px 16px; border-top:1px solid var(--line);}
+  .total-row{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px;}
+  .total-row .amt{font-size:clamp(20px,2vw,26px); font-weight:700;}
+  .pay-toggle{display:flex; gap:8px; margin-bottom:10px;}
+  .pay-toggle button{flex:1; padding:9px; border-radius:4px; border:1px solid var(--line); background:transparent; color:var(--crema-dim); cursor:pointer; font-size:13px; font-weight:600;}
+  .pay-toggle button.active{background:var(--copper); color:var(--accent-text); border-color:var(--copper);}
+  .empty-cart{padding:30px 10px; text-align:center; color:var(--crema-dim); font-size:13px;}
+
+  /* ---------- tables ---------- */
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th{text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--crema-dim); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line);}
+  td{padding:9px 10px; border-bottom:1px solid var(--line);}
+  tr:last-child td{border-bottom:none;}
+
+  .stat-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:18px;}
+  .stat{background:var(--espresso-2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; box-shadow:var(--shadow-sm);}
+  .stat .label{font-size:11px; color:var(--crema-dim); margin-bottom:6px;}
+  .stat .value{font-size:clamp(18px,2vw,24px); font-weight:700;}
+
+  .tabs{display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--line); flex-wrap:wrap;}
+  .tab{padding:10px 16px; font-size:13px; font-weight:600; color:var(--crema-dim); cursor:pointer; border-bottom:2px solid transparent;}
+  .tab.active{color:var(--paper); border-bottom-color:var(--copper);}
+
+  /* modal */
+  .modal-bg{position:fixed; inset:0; background:rgba(0,0,0,.35); backdrop-filter:blur(6px); display:flex; align-items:center; justify-content:center; z-index:500; padding:20px;}
+  .modal{background:var(--espresso-2); background:color-mix(in srgb, var(--espresso-2) 88%, transparent); backdrop-filter:blur(20px) saturate(1.3); border:1px solid var(--line); border-radius:12px; padding:22px; max-width:440px; width:100%; max-height:85vh; overflow-y:auto; box-shadow:var(--shadow-lg);}
+  .modal h3{margin-bottom:16px;}
+  .modal-actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;}
+  .modal-actions .btn{flex:1;}
+
+  .receipt{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; background:#fdfbf7; color:#231a12;
+    border-radius:6px; padding:18px; line-height:1.6;
+  }
+  .receipt .rline{display:flex; justify-content:space-between;}
+  .receipt hr{border:none; border-top:1px dashed #231a12; opacity:.35; margin:8px 0;}
+
+  .empty-state{padding:50px 20px; text-align:center; color:var(--crema-dim);}
+  .empty-state .big{font-size:38px; margin-bottom:10px;}
+
+  .banner{padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; border:1px solid;}
+  .banner.warn{background:rgba(217,138,82,.08); border-color:rgba(217,138,82,.35); color:var(--copper-light);}
+  .banner.err{background:rgba(181,69,58,.08); border-color:rgba(181,69,58,.35); color:#e5978d;}
+  .banner.ok{background:rgba(122,154,108,.08); border-color:rgba(122,154,108,.35); color:#cfe3c6;}
+
+  code{background:var(--espresso); padding:1px 6px; border-radius:4px; font-size:12px;}
+  .setup-steps li{margin-bottom:10px; font-size:13px; color:var(--paper-dim); line-height:1.5;}
+
+  /* ---------- coupon row ---------- */
+  .coupon-row{display:flex; gap:8px; margin-bottom:10px;}
+  .coupon-row input{flex:1;}
+  .applied-coupon{
+    display:flex; align-items:center; justify-content:space-between;
+    background:rgba(122,154,108,0.1); border:1px solid rgba(122,154,108,.35);
+    color:#cfe3c6; padding:7px 10px; border-radius:7px; font-size:12.5px; margin-bottom:10px;
+  }
+  .applied-coupon a{color:#e5978d; cursor:pointer; font-weight:600;}
+  .discount-row{display:flex; justify-content:space-between; font-size:13px; color:var(--ok); margin-bottom:6px;}
+
+  /* ---------- draggable buttons / rows ---------- */
+  .product-btn.draggable{cursor:grab;}
+  .product-btn.dragging{opacity:0.35;}
+  .product-btn.drag-over{border-color:var(--copper-light); box-shadow:0 0 0 2px var(--copper-light) inset;}
+  .drag-hint{font-size:11.5px; color:var(--crema-dim); margin-bottom:10px;}
+  .cat-row{display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:grab; background:var(--espresso);}
+  .cat-row.dragging{opacity:.4;}
+  .cat-row.drag-over{border-color:var(--copper-light); box-shadow:0 0 0 2px var(--copper-light) inset;}
+  .cat-row .cname{font-weight:600; font-size:13.5px;}
+  .cat-row .ccount{font-size:11px; color:var(--crema-dim);}
+
+  /* ---------- fixed N-column grid (auto-aligned, developer sets rows/cols) ---------- */
+  .product-grid.fixed-grid{
+    grid-template-columns:repeat(var(--grid-cols,6), 1fr);
+    grid-auto-rows:var(--btn-height, 100px);
+    overflow-y:auto; padding:4px; border:1px dashed var(--line); border-radius:8px;
+  }
+  .product-grid.fixed-grid .product-btn{ aspect-ratio:auto; height:100%; }
+  .free-toggle-row{display:flex; align-items:center; gap:10px; margin-bottom:14px;}
+
+  /* ---------- numpad ---------- */
+  .numpad-panel{
+    background:var(--espresso-2); border:1px solid var(--line); border-radius:8px; padding:14px;
+    box-shadow:var(--shadow-md); position:sticky; top:18px;
+  }
+  .numpad-panel h3{font-size:14px; margin-bottom:10px;}
+  .numpad-target{font-size:12.5px; color:var(--crema-dim); margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
+  .numpad-target a{color:var(--err); cursor:pointer;}
+  .numpad-display{font-family:'JetBrains Mono',monospace; font-size:clamp(20px,2.4vw,28px); text-align:right; padding:12px 14px; background:var(--espresso); border:1px solid var(--line); border-radius:6px; margin-bottom:12px;}
+  .numpad-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px;}
+  .numpad-grid button{padding:clamp(10px,1.6vw,16px); font-size:clamp(15px,1.6vw,19px); border-radius:6px; border:1px solid var(--line); background:var(--espresso); color:var(--paper); cursor:pointer; font-family:'JetBrains Mono',monospace;}
+  .numpad-grid button:active{background:var(--copper); color:var(--accent-text);}
+
+  /* ---------- settings ---------- */
+  .settings-section{margin-bottom:24px;}
+  .settings-section h4{font-size:12px; color:var(--crema-dim); margin-bottom:12px; text-transform:uppercase; letter-spacing:.05em;}
+  .logo-row{display:flex; align-items:center; gap:14px; margin-bottom:14px;}
+  .logo-preview{width:56px; height:56px; border-radius:10px; object-fit:cover; background:var(--espresso); border:1px solid var(--line);}
+  .logo-preview.empty{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--crema-dim);}
+  .theme-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; margin-bottom:8px;}
+  .theme-swatch-field{display:flex; align-items:center; gap:10px; background:var(--espresso); border:1px solid var(--line); border-radius:8px; padding:9px 12px;}
+  .theme-swatch-field input[type=color]{width:34px; height:34px; padding:0; border:none; border-radius:6px; background:none; cursor:pointer;}
+  .theme-swatch-field .tlabel{font-size:12.5px; flex:1;}
+  .theme-swatch-field .tval{font-size:11px; color:var(--crema-dim);}
+  .inline-row{display:flex; gap:10px; align-items:flex-end;}
+  .inline-row .field{flex:1; margin-bottom:0;}
+
+  /* ---------- print ---------- */
+  #printArea{display:none;}
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{
+      display:block; position:absolute; top:0; left:0; width:100%;
+      background:#fff; color:#000; padding:0;
+    }
+  }
+
+  /* ---------- landscape-only on phones ----------
+     manifest.json's "orientation":"landscape" locks this when installed as a
+     PWA on Android, but that isn't honored on iOS or in a plain browser tab,
+     so this overlay is the reliable fallback everywhere. */
+  #rotateOverlay{display:none;}
+  @media (max-width:900px) and (orientation:portrait){
+    #app{display:none;}
+    #rotateOverlay{
+      display:flex; position:fixed; inset:0; z-index:9999;
+      background:var(--espresso); color:var(--paper);
+      flex-direction:column; align-items:center; justify-content:center;
+      text-align:center; padding:30px; gap:14px;
+    }
+    #rotateOverlay .icon{font-size:52px; animation:rotateHint 1.8s ease-in-out infinite;}
+    @keyframes rotateHint{ 0%,100%{transform:rotate(0deg);} 50%{transform:rotate(90deg);} }
+  }
+</style>
+</head>
+<body>
+<div id="rotateOverlay">
+  <div class="icon">📱</div>
+  <h2 style="font-size:18px;">Please rotate your device</h2>
+  <p style="font-size:13px; color:var(--crema-dim); max-width:280px;">Sade POS is designed for landscape use — turn your phone sideways to continue.</p>
+</div>
+<div id="app"></div>
+
+<script>
+/* =========================================================================
+   SADE POS — single-file PWA point of sale backed by Google Drive.
+   Roles: developer (build/manage, hidden from the team list),
+          admin (view-only), cashier (sell).
+   ========================================================================= */
+
+/* ---------------- CONFIG ----------------
+   Fill these in from your own Google Cloud project. Nothing will work
+   until CLIENT_ID is set (see the in-app Setup screen for exact steps). */
+const CONFIG = {
+  CLIENT_ID: "123572472682-v17hrcl71fg8t477rb4s0rk6lf6h4ooj.apps.googleusercontent.com",
+  DB_FILENAME: "sade_pos_db.json",
+  SCOPES: "https://www.googleapis.com/auth/drive",
+  SYNC_INTERVAL_MS: 20000
+};
+
+/* Matches Windows 11's actual system Light/Dark palettes (window bg, card/control
+   surfaces, default accent blue, and text) so the quick-select presets feel native. */
+const LIGHT_THEME = {
+  bg:"#f3f3f3", bg2:"#ffffff", accent:"#0078d4", accentLight:"#106ebe", text:"#1b1b1b"
+};
+const DARK_THEME = {
+  bg:"#202020", bg2:"#2c2c2c", accent:"#4cc2ff", accentLight:"#60cdff", text:"#ffffff"
+};
+const DEFAULT_THEME = { ...LIGHT_THEME };
+
+const CURRENCY_PRESETS = [
+  {code:"USD", symbol:"$"}, {code:"EUR", symbol:"€"}, {code:"GBP", symbol:"£"},
+  {code:"TRY", symbol:"₺"}, {code:"JPY", symbol:"¥"}, {code:"CUSTOM", symbol:""}
+];
+
+/* ---------------- STATE ---------------- */
+const state = {
+  accessToken: null,
+  tokenClient: null,
+  dbFileId: null,
+  db: null,
+  currentUser: null,
+  cart: [],
+  payMethod: "cash",
+  appliedCoupon: null,
+  view: null,
+  adminTab: "live",
+  devTab: "products",
+  syncTimer: null,
+  saving: false,
+  offlinePending: false,
+  dragProductId: null,
+  dragCategoryId: null,
+  numpadAmount: "",
+  numpadTarget: null   // null (locked), {kind:"product", id, name, isDrink}, or {kind:"coupon"}
+};
+
+const $ = sel => document.querySelector(sel);
+const app = () => document.getElementById("app");
+const uid = () => crypto.randomUUID();
+const nowIso = () => new Date().toISOString();
+const todayStr = () => new Date().toISOString().slice(0,10);
+function money(n){
+  const amt = (Math.round((n||0)*100)/100).toFixed(2);
+  const code = state.db && state.db.meta ? state.db.meta.currencyCode : "USD";
+  if(code === "TRY"){
+    return amt + ' <span style="font-size:0.75em;">tl</span>';
+  }
+  const sym = (state.db && state.db.meta && state.db.meta.currencySymbol) || "$";
+  return sym + amt;
+}
+/* plain-text version (no HTML) for places that can't render markup, e.g. window.print titles */
+function moneyText(n){
+  const amt = (Math.round((n||0)*100)/100).toFixed(2);
+  const code = state.db && state.db.meta ? state.db.meta.currencyCode : "USD";
+  if(code === "TRY") return amt + " tl";
+  const sym = (state.db && state.db.meta && state.db.meta.currencySymbol) || "$";
+  return sym + amt;
+}
+
+async function sha256(text){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+function toast(msg, kind){
+  const t = document.createElement("div");
+  t.className = "toast" + (kind ? " "+kind : "");
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3200);
+}
+
+/* ---------------- DEFAULT DB ---------------- */
+function defaultDb(){
+  const catCoffee = uid(), catBakery = uid();
+  return {
+    meta: {
+      appActive: true, businessName: "Sade Coffee", logoDataUrl: null,
+      currencySymbol: "$", currencyCode: "USD", freeLayout: false,
+      layout: { numpadWidth: 300, cartWidth: 340, canvasHeight: 560, gridCols: 6, gridRows: 4 },
+      roleLabels: { admin: "Admin", cashier: "Cashier" },
+      receiptHeader: "", receiptFooter: "Thank you!", autoPrintReceipt: true,
+      theme: {...DEFAULT_THEME}, updatedAt: nowIso()
+    },
+    users: [],
+    categories: [
+      { id: catCoffee, name:"Coffee", order:0 },
+      { id: catBakery, name:"Bakery", order:1 },
+    ],
+    products: [
+      { id: uid(), name:"Espresso", price:3.00, categoryId:catCoffee, emoji:"☕", color:"#b5652f", isDrink:true, active:true, order:0, updatedAt: nowIso() },
+      { id: uid(), name:"Latte", price:4.50, categoryId:catCoffee, emoji:"🥛", color:"#c7a877", isDrink:true, active:true, order:1, updatedAt: nowIso() },
+      { id: uid(), name:"Cappuccino", price:4.25, categoryId:catCoffee, emoji:"☕", color:"#8a5a34", isDrink:true, active:true, order:2, updatedAt: nowIso() },
+      { id: uid(), name:"Cold Brew", price:4.75, categoryId:catCoffee, emoji:"🧊", color:"#3d3128", isDrink:true, active:true, order:3, updatedAt: nowIso() },
+      { id: uid(), name:"Croissant", price:3.50, categoryId:catBakery, emoji:"🥐", color:"#d9a441", isDrink:false, active:true, order:4, updatedAt: nowIso() },
+      { id: uid(), name:"Muffin", price:3.25, categoryId:catBakery, emoji:"🧁", color:"#a8763e", isDrink:false, active:true, order:5, updatedAt: nowIso() },
+    ],
+    coupons: [],
+    sales: [],
+    dayCloses: []
+  };
+}
+
+/* bring an older/incomplete db up to the current shape — always safe to re-run */
+function migrateDb(db){
+  db.meta = db.meta || {};
+  if(db.meta.appActive===undefined) db.meta.appActive = true;
+  if(!db.meta.businessName) db.meta.businessName = "Sade Coffee";
+  if(!db.meta.currencySymbol) db.meta.currencySymbol = "$";
+  if(!db.meta.currencyCode) db.meta.currencyCode = "USD";
+  if(db.meta.freeLayout===undefined) db.meta.freeLayout = false;
+  if(!db.meta.layout) db.meta.layout = { numpadWidth: 300, cartWidth: 340, canvasHeight: 560, btnWidth: 110, btnHeight: 95 };
+  if(db.meta.layout.btnWidth===undefined) db.meta.layout.btnWidth = 110;
+  if(db.meta.layout.btnHeight===undefined) db.meta.layout.btnHeight = 95;
+  if(!db.meta.roleLabels) db.meta.roleLabels = { admin: "Admin", cashier: "Cashier" };
+  if(!db.meta.roleLabels.admin) db.meta.roleLabels.admin = "Admin";
+  if(!db.meta.roleLabels.cashier) db.meta.roleLabels.cashier = "Cashier";
+  if(db.meta.receiptHeader===undefined) db.meta.receiptHeader = "";
+  if(!db.meta.receiptFooter) db.meta.receiptFooter = "Thank you!";
+  if(db.meta.autoPrintReceipt===undefined) db.meta.autoPrintReceipt = true;
+  if(db.meta.logoDataUrl===undefined) db.meta.logoDataUrl = null;
+  if(!db.meta.theme) db.meta.theme = {...DEFAULT_THEME};
+  if(!db.meta.updatedAt) db.meta.updatedAt = nowIso();
+
+  db.users = db.users || [];
+  db.products = db.products || [];
+  db.coupons = db.coupons || [];
+  db.sales = db.sales || [];
+  db.dayCloses = db.dayCloses || [];
+
+  if(!db.categories || db.categories.length===0){
+    db.categories = [
+      { id: uid(), name:"Coffee", order:0 },
+      { id: uid(), name:"Bakery", order:1 },
+    ];
+  }
+  db.products.forEach((p,i)=>{
+    if(!p.categoryId){
+      const match = db.categories.find(c=>c.name.toLowerCase()===String(p.category||"").toLowerCase());
+      p.categoryId = match ? match.id : db.categories[0].id;
+    }
+    if(p.isDrink===undefined) p.isDrink = true;
+    if(p.order===undefined) p.order = i;
+    if(p.active===undefined) p.active = true;
+    if(p.price===undefined) p.price = 0;
+    if(!p.pos){
+      // fallback grid so nothing overlaps if free layout gets turned on later
+      const col = i % 6, row = Math.floor(i/6);
+      p.pos = { xPct: 4 + col*16, yPct: 6 + row*22 };
+    }
+  });
+  db.sales.forEach(s=>{
+    if(s.subtotal===undefined) s.subtotal = s.total;
+    if(s.discountAmt===undefined) s.discountAmt = 0;
+    if(s.discountPercent===undefined) s.discountPercent = 0;
+  });
+  return db;
+}
+
+/* apply theme colors from db.meta.theme onto the page */
+function hexLuminance(hex){
+  hex = (hex||"#ffffff").replace("#","");
+  if(hex.length===3) hex = hex.split("").map(c=>c+c).join("");
+  const r=parseInt(hex.substr(0,2),16)||0, g=parseInt(hex.substr(2,2),16)||0, b=parseInt(hex.substr(4,2),16)||0;
+  return (0.299*r+0.587*g+0.114*b)/255;
+}
+function applyDerivedNeutrals(bgHex){
+  const dark = hexLuminance(bgHex) < 0.5;
+  const root = document.documentElement.style;
+  root.setProperty("--line", dark ? "rgba(255,255,255,0.14)" : "#e1dfdd");
+  root.setProperty("--crema", dark ? "#e9c996" : "#605e5c");
+  root.setProperty("--crema-dim", dark ? "#c7a877" : "#8a8886");
+  root.setProperty("--paper-dim", dark ? "#d9cbb4" : "#484644");
+}
+/* text placed on top of the accent color (buttons, badges) needs to flip
+   dark/light depending on how bright the accent itself is */
+function applyAccentText(accentHex){
+  const dark = hexLuminance(accentHex) < 0.6;
+  document.documentElement.style.setProperty("--accent-text", dark ? "#ffffff" : "#1b1b1b");
+}
+
+function applyTheme(){
+  const t = (state.db && state.db.meta && state.db.meta.theme) ? state.db.meta.theme : DEFAULT_THEME;
+  const root = document.documentElement.style;
+  root.setProperty("--espresso", t.bg || DEFAULT_THEME.bg);
+  root.setProperty("--espresso-2", t.bg2 || DEFAULT_THEME.bg2);
+  root.setProperty("--copper", t.accent || DEFAULT_THEME.accent);
+  root.setProperty("--copper-light", t.accentLight || DEFAULT_THEME.accentLight);
+  root.setProperty("--paper", t.text || DEFAULT_THEME.text);
+  applyDerivedNeutrals(t.bg || DEFAULT_THEME.bg);
+  applyAccentText(t.accent || DEFAULT_THEME.accent);
+  applyLayout();
+  applyBrandingToTab();
+}
+/* keeps the browser tab's title and favicon in sync with the developer's
+   business name / logo settings, so there's nothing to hand-edit in code */
+function applyBrandingToTab(){
+  if(!state.db || !state.db.meta) return;
+  document.title = state.db.meta.businessName || "Sade POS";
+  let iconLink = document.querySelector('link[rel="icon"]');
+  if(!iconLink){
+    iconLink = document.createElement("link");
+    iconLink.rel = "icon";
+    document.head.appendChild(iconLink);
+  }
+  if(state.db.meta.logoDataUrl){
+    iconLink.type = "";
+    iconLink.href = state.db.meta.logoDataUrl;
+  } else {
+    iconLink.type = "image/svg+xml";
+    iconLink.href = "icon.svg";
+  }
+}
+function applyThemeDraft(draft){
+  const root = document.documentElement.style;
+  root.setProperty("--espresso", draft.bg);
+  root.setProperty("--espresso-2", draft.bg2);
+  root.setProperty("--copper", draft.accent);
+  root.setProperty("--copper-light", draft.accentLight);
+  root.setProperty("--paper", draft.text);
+  applyDerivedNeutrals(draft.bg);
+  applyAccentText(draft.accent);
+}
+
+const DEFAULT_LAYOUT = { numpadWidth: 300, cartWidth: 340, canvasHeight: 560, btnWidth: 110, btnHeight: 95 };
+function applyLayout(){
+  const l = (state.db && state.db.meta && state.db.meta.layout) ? state.db.meta.layout : DEFAULT_LAYOUT;
+  const root = document.documentElement.style;
+  root.setProperty("--numpad-width", (l.numpadWidth||DEFAULT_LAYOUT.numpadWidth) + "px");
+  root.setProperty("--cart-width", (l.cartWidth||DEFAULT_LAYOUT.cartWidth) + "px");
+  root.setProperty("--canvas-height", (l.canvasHeight||DEFAULT_LAYOUT.canvasHeight) + "px");
+  root.setProperty("--btn-width", (l.btnWidth||DEFAULT_LAYOUT.btnWidth) + "px");
+  root.setProperty("--btn-height", (l.btnHeight||DEFAULT_LAYOUT.btnHeight) + "px");
+}
+function applyLayoutDraft(draft){
+  const root = document.documentElement.style;
+  root.setProperty("--numpad-width", draft.numpadWidth + "px");
+  root.setProperty("--cart-width", draft.cartWidth + "px");
+  root.setProperty("--canvas-height", draft.canvasHeight + "px");
+  root.setProperty("--btn-width", draft.btnWidth + "px");
+  root.setProperty("--btn-height", draft.btnHeight + "px");
+}
+
+/* developer-customizable display names for the admin/cashier roles */
+function roleLabel(key){
+  if(key==="developer") return "Developer";
+  const labels = state.db && state.db.meta && state.db.meta.roleLabels;
+  return (labels && labels[key]) || (key.charAt(0).toUpperCase()+key.slice(1));
+}
+
+/* print any HTML fragment using a hidden print-only container */
+function printHTML(innerHtml){
+  let area = document.getElementById("printArea");
+  if(!area){
+    area = document.createElement("div");
+    area.id = "printArea";
+    document.body.appendChild(area);
+  }
+  area.innerHTML = innerHtml;
+  window.print();
+}
+
+/* wraps receipt/report rows with the developer's logo, business name, header & footer */
+function receiptWrap(innerRowsHtml){
+  const m = state.db.meta;
+  return `
+    ${m.logoDataUrl ? `<div style="text-align:center;margin-bottom:6px;"><img src="${m.logoDataUrl}" style="max-height:50px;max-width:150px;"/></div>` : ""}
+    <div style="text-align:center;font-weight:700;">${m.businessName||"Sade Coffee"}</div>
+    ${m.receiptHeader ? `<div style="text-align:center;font-size:11px;white-space:pre-line;margin-top:2px;">${m.receiptHeader}</div>` : ""}
+    <hr/>
+    ${innerRowsHtml}
+    <hr/>
+    <div style="text-align:center;font-size:11px;white-space:pre-line;">${m.receiptFooter||"Thank you!"}</div>`;
+}
+
+/* ---------------- LOCAL CACHE (offline resilience) ----------------
+   NOTE: uses localStorage, which only works once this file is hosted on
+   its own real address (GitHub Pages, etc) — not inside Claude's in-chat
+   preview. It's a safety net so a dropped connection mid-shift doesn't
+   lose sales; it is not a substitute for the Drive database. */
+function cacheKey(){ return "sade_cache_" + CONFIG.DB_FILENAME; }
+function saveLocalCache(){
+  try{ localStorage.setItem(cacheKey(), JSON.stringify({ dbFileId: state.dbFileId, db: state.db })); }catch(e){}
+}
+function loadLocalCache(){
+  try{ const raw = localStorage.getItem(cacheKey()); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+}
+
+/* ================= GOOGLE DRIVE LAYER ================= */
+
+function gisReady(){
+  return new Promise(resolve=>{
+    const check = () => (window.google && google.accounts && google.accounts.oauth2) ? resolve() : setTimeout(check,100);
+    check();
+  });
+}
+
+async function connectDrive(){
+  await gisReady();
+  return new Promise((resolve,reject)=>{
+    state.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CONFIG.CLIENT_ID,
+      scope: CONFIG.SCOPES,
+      callback: (resp)=>{
+        if(resp.error){ reject(resp); return; }
+        state.accessToken = resp.access_token;
+        resolve(resp.access_token);
+      }
+    });
+    state.tokenClient.requestAccessToken({prompt: ""});
+  });
+}
+
+function authHeaders(){
+  return { "Authorization": "Bearer " + state.accessToken };
+}
+
+async function driveFindDbFile(){
+  const q = encodeURIComponent(`name='${CONFIG.DB_FILENAME}' and trashed=false`);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`, {headers: authHeaders()});
+  if(!res.ok) throw new Error("Drive list failed: "+res.status);
+  const data = await res.json();
+  return data.files && data.files.length ? data.files[0] : null;
+}
+
+async function driveCreateDbFile(dbObj){
+  const boundary = "sade-boundary";
+  const metadata = { name: CONFIG.DB_FILENAME, mimeType: "application/json" };
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(dbObj)}\r\n` +
+    `--${boundary}--`;
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+    method:"POST",
+    headers:{ ...authHeaders(), "Content-Type": `multipart/related; boundary=${boundary}` },
+    body
+  });
+  if(!res.ok) throw new Error("Drive create failed: "+res.status);
+  const data = await res.json();
+  return data.id;
+}
+
+async function driveReadFile(fileId){
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {headers: authHeaders()});
+  if(!res.ok) throw new Error("Drive read failed: "+res.status);
+  return await res.json();
+}
+
+async function driveWriteFile(fileId, dbObj){
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method:"PATCH",
+    headers:{ ...authHeaders(), "Content-Type":"application/json" },
+    body: JSON.stringify(dbObj)
+  });
+  if(!res.ok) throw new Error("Drive write failed: "+res.status);
+}
+
+/* merge remote + local: newer 'updatedAt' wins per-record; sales/dayCloses union by id */
+function mergeDb(local, remote){
+  if(!remote) return local;
+  if(!local) return remote;
+  const merged = { meta: null, users: [], products: [], categories: [], coupons: [], sales: [], dayCloses: [] };
+  merged.meta = (new Date(remote.meta.updatedAt) > new Date(local.meta.updatedAt)) ? remote.meta : local.meta;
+
+  function mergeById(a, b){
+    const map = {};
+    [...(a||[]), ...(b||[])].forEach(rec=>{
+      const existing = map[rec.id];
+      if(!existing || new Date(rec.updatedAt || rec.createdAt || 0) >= new Date(existing.updatedAt || existing.createdAt || 0)){
+        map[rec.id] = rec;
+      }
+    });
+    return Object.values(map);
+  }
+  merged.users = mergeById(local.users, remote.users);
+  merged.products = mergeById(local.products, remote.products);
+  merged.categories = mergeById(local.categories, remote.categories);
+  merged.coupons = mergeById(local.coupons, remote.coupons);
+
+  function unionById(a,b){
+    const map = {};
+    [...(a||[]), ...(b||[])].forEach(r=>{ map[r.id] = r; });
+    return Object.values(map).sort((x,y)=> new Date(x.timestamp||x.closedAt) - new Date(y.timestamp||y.closedAt));
+  }
+  merged.sales = unionById(local.sales, remote.sales);
+  merged.dayCloses = unionById(local.dayCloses, remote.dayCloses);
+  return merged;
+}
+
+async function pullFromDrive(silent){
+  if(!navigator.onLine) return;
+  try{
+    const remote = await driveReadFile(state.dbFileId);
+    state.db = migrateDb(mergeDb(state.db, remote));
+    applyTheme();
+    saveLocalCache();
+    if(!silent) render();
+    else renderIfLive();
+  }catch(e){ console.warn("pull failed", e); }
+}
+
+let pendingSave = null;
+async function pushToDrive(){
+  state.db.meta.updatedAt = nowIso();
+  saveLocalCache();
+  clearTimeout(pendingSave);
+  pendingSave = setTimeout(async ()=>{
+    if(!navigator.onLine){
+      state.offlinePending = true;
+      renderIfLive();
+      return;
+    }
+    try{
+      state.saving = true;
+      await driveWriteFile(state.dbFileId, state.db);
+      state.offlinePending = false;
+    }catch(e){
+      console.warn("save failed", e);
+      state.offlinePending = true;
+    }finally{
+      state.saving = false;
+      renderIfLive();
+    }
+  }, 400);
+}
+
+async function flushOffline(){
+  if(!state.dbFileId || !navigator.onLine) return;
+  try{
+    if(!state.accessToken){
+      // booted from local cache with no live session yet — get a token first.
+      // Browsers can block an auto-opened popup that isn't from a direct click,
+      // so this is best-effort; the sync pill offers a manual retry either way.
+      await connectDrive();
+    }
+    const remote = await driveReadFile(state.dbFileId);
+    state.db = migrateDb(mergeDb(state.db, remote));
+    await driveWriteFile(state.dbFileId, state.db);
+    state.offlinePending = false;
+    saveLocalCache();
+    applyTheme();
+    startSyncLoop();
+    toast("Back online — synced", "ok");
+    render();
+  }catch(e){ console.warn("flush failed", e); }
+}
+
+function startSyncLoop(){
+  clearInterval(state.syncTimer);
+  state.syncTimer = setInterval(()=>{
+    if(state.offlinePending || !state.accessToken) flushOffline();
+    else pullFromDrive(true);
+  }, CONFIG.SYNC_INTERVAL_MS);
+}
+
+/* re-render only if we're on a "live" screen, to avoid clobbering form input focus */
+function renderIfLive(){
+  if(["admin","developer"].includes(state.view)) render();
+  else if(state.view==="cashier"){
+    // just refresh the sync pill without rebuilding the whole cart/typing state
+    const pill = document.getElementById("syncPill");
+    if(pill){ pill.outerHTML = syncPillHtml(); wireSyncPill(); }
+  }
+}
+function syncPillHtml(){
+  if(!state.accessToken){
+    return `<span class="pill" id="syncPill" style="cursor:pointer; border-color:var(--copper);"><span class="dot offline"></span>Tap to connect to Drive</span>`;
+  }
+  const offline = state.offlinePending || !navigator.onLine;
+  return `<span class="pill" id="syncPill"${offline?' style="cursor:pointer;"':''}><span class="dot ${offline?'offline':'live'}"></span>${offline ? "Offline — tap to retry" : (state.saving ? "Syncing…" : "Live")}</span>`;
+}
+function wireSyncPill(){
+  const pill = document.getElementById("syncPill");
+  if(pill && (!state.accessToken || state.offlinePending)){
+    pill.onclick = ()=> flushOffline();
+  }
+}
+
+window.addEventListener("online", ()=>{ if(state.dbFileId) flushOffline(); });
+window.addEventListener("offline", ()=>{
+  state.offlinePending = true;
+  toast("You're offline — sales keep working and will sync automatically", "err");
+  renderIfLive();
+});
+
+/* ================= AUTH (in-app roles) ================= */
+
+async function tryLogin(username, password){
+  const hash = await sha256(password);
+  const user = state.db.users.find(u => u.username.toLowerCase() === username.trim().toLowerCase() && u.active !== false);
+  if(!user || user.passwordHash !== hash) return null;
+  return user;
+}
+
+/* ================= INIT / BOOTSTRAP ================= */
+
+async function init(){
+  if("serviceWorker" in navigator){
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  }
+  // best-effort native orientation lock (only works in fullscreen/installed
+  // contexts on some browsers) — the CSS rotate overlay is the real fallback
+  if(screen.orientation && screen.orientation.lock){
+    screen.orientation.lock("landscape").catch(()=>{});
+  }
+  if(CONFIG.CLIENT_ID.includes("YOUR_GOOGLE_OAUTH_CLIENT_ID")){
+    state.view = "setup";
+    render();
+    return;
+  }
+
+  // If this device has synced before, boot straight into the app from the
+  // local cache — no network required — so the PWA is usable offline from a
+  // cold start, not just mid-session. If we're online, try a quiet reconnect;
+  // if that's blocked (browsers can block auto-opened popups with no direct
+  // click behind them) the top bar's sync pill offers a manual retry.
+  const cached = loadLocalCache();
+  if(cached && cached.db){
+    state.dbFileId = cached.dbFileId;
+    state.db = migrateDb(cached.db);
+    applyTheme();
+    state.view = "login";
+    render();
+    flushOffline();
+    return;
+  }
+
+  state.view = "connect";
+  render();
+}
+
+async function seedDefaultDbUsers(db){
+  const hash = await sha256("developer123");
+  db.users.push({
+    id: uid(), username:"developer", passwordHash: hash, role:"developer",
+    name:"Developer", active:true, createdAt: nowIso(), updatedAt: nowIso()
+  });
+}
+
+async function handleConnect(){
+  try{
+    await connectDrive();
+    toast("Connected to Google Drive", "ok");
+    let file = await driveFindDbFile();
+    if(!file){
+      const fresh = defaultDb();
+      await seedDefaultDbUsers(fresh);
+      const id = await driveCreateDbFile(fresh);
+      state.dbFileId = id;
+      state.db = migrateDb(fresh);
+      toast("Created new database on Drive", "ok");
+      await pushToDrive();
+    } else {
+      state.dbFileId = file.id;
+      state.db = migrateDb(await driveReadFile(file.id));
+      if(!state.db.users || state.db.users.length===0){
+        await seedDefaultDbUsers(state.db);
+      }
+      await pushToDrive();
+    }
+    applyTheme();
+    saveLocalCache();
+    startSyncLoop();
+    state.view = "login";
+    render();
+  }catch(e){
+    console.error(e);
+    toast("Could not connect to Google Drive. Check console / Client ID.", "err");
+  }
+}
+
+/* ================= RENDER ROUTER ================= */
+
+function render(){
+  const el = app();
+  el.innerHTML = "";
+  if(state.view === "setup") return renderSetupScreen(el);
+  if(state.view === "connect") return renderConnectScreen(el);
+  if(state.view === "login") return renderLoginScreen(el);
+  if(state.view === "cashier") return renderShell(el, renderCashierView);
+  if(state.view === "admin") return renderShell(el, renderAdminView);
+  if(state.view === "developer") return renderShell(el, renderDeveloperView);
+}
+
+/* ---------------- SETUP (no client id configured) ---------------- */
+function renderSetupScreen(el){
+  const wrap = document.createElement("div");
+  wrap.className = "center-screen";
+  wrap.innerHTML = `
+    <div class="panel" style="max-width:520px;">
+      <div class="brand"><div class="mark">S</div><div><div class="name">Sade POS</div><div class="sub">SETUP REQUIRED</div></div></div>
+      <div class="card">
+        <h3 style="margin-bottom:12px;">Connect this app to Google Drive</h3>
+        <p style="font-size:13px; color:var(--paper-dim); line-height:1.6; margin-bottom:14px;">
+          This app stores everything (products, users, sales, reports) in one JSON file on Google Drive.
+          Before it can run, you need your own free Google OAuth Client ID.
+        </p>
+        <ol class="setup-steps" style="padding-left:18px;">
+          <li>Go to <code>console.cloud.google.com</code> and create a project.</li>
+          <li>Enable the <b>Google Drive API</b>.</li>
+          <li>Fill in the <b>Branding</b> page and add your Google account as a <b>test user</b> under Audience.</li>
+          <li>Go to <b>Clients → Create Client</b>, type <b>Web application</b>.</li>
+          <li>Under <b>Authorized JavaScript origins</b>, add the URL this file is hosted on.</li>
+          <li>Copy the generated Client ID into <code>CONFIG.CLIENT_ID</code> near the top of this file's script, then reload.</li>
+        </ol>
+      </div>
+    </div>`;
+  el.appendChild(wrap);
+}
+
+/* ---------------- CONNECT SCREEN ---------------- */
+function renderConnectScreen(el){
+  const wrap = document.createElement("div");
+  wrap.className = "center-screen";
+  wrap.innerHTML = `
+    <div class="panel">
+      <div class="brand"><div class="mark">S</div><div><div class="name">Sade POS</div><div class="sub">COFFEE SHOP SYSTEM</div></div></div>
+      <div class="card">
+        <h3 style="margin-bottom:8px;">Connect to Google Drive</h3>
+        <p style="font-size:13px; color:var(--paper-dim); margin-bottom:18px; line-height:1.5;">
+          Sign in with the shop's Google account. This device will read and write the shared sales database.
+        </p>
+        <button class="btn btn-primary btn-block" id="connectBtn">Connect Google Drive</button>
+      </div>
+    </div>`;
+  el.appendChild(wrap);
+  $("#connectBtn").onclick = ()=>{
+    $("#connectBtn").disabled = true;
+    $("#connectBtn").textContent = "Connecting…";
+    handleConnect();
+  };
+}
+
+/* ---------------- LOGIN SCREEN ---------------- */
+function renderLoginScreen(el){
+  const m = state.db.meta;
+  const wrap = document.createElement("div");
+  wrap.className = "center-screen";
+  wrap.innerHTML = `
+    <div class="panel">
+      <div class="brand">
+        <div class="mark">${m.logoDataUrl ? `<img src="${m.logoDataUrl}"/>` : "S"}</div>
+        <div><div class="name">${m.businessName || "Sade POS"}</div><div class="sub">SIGN IN</div></div>
+      </div>
+      ${!m.appActive ? `<div class="banner warn">System is currently deactivated by the developer. Cashiers cannot sell until it's reactivated.</div>` : ""}
+      <div class="card">
+        <div class="field"><label>Username</label><input id="lu" name="sade_user_${Date.now()}" autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label>Password</label><input id="lp" type="password" name="sade_pass_${Date.now()}" autocomplete="new-password" /></div>
+        <div id="loginErr" style="color:var(--err); font-size:12.5px; min-height:16px; margin-bottom:8px;"></div>
+        <button class="btn btn-primary btn-block" id="loginBtn">Sign in</button>
+      </div>
+    </div>`;
+  el.appendChild(wrap);
+  const doLogin = async ()=>{
+    const u = $("#lu").value, p = $("#lp").value;
+    const user = await tryLogin(u,p);
+    if(!user){ $("#loginErr").textContent = "Incorrect username or password."; return; }
+    if(user.role === "cashier" && !state.db.meta.appActive){
+      $("#loginErr").textContent = "System is deactivated. Ask the developer to activate it.";
+      return;
+    }
+    state.currentUser = { id:user.id, username:user.username, role:user.role, name:user.name };
+    state.cart = [];
+    state.appliedCoupon = null;
+    state.view = user.role;
+    render();
+  };
+  $("#loginBtn").onclick = doLogin;
+  $("#lp").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+}
+
+/* ---------------- SHELL (topbar + role screen) ---------------- */
+function renderShell(el, contentFn){
+  const shell = document.createElement("div");
+  shell.className = "shell";
+  const roleLabelText = roleLabel(state.currentUser.role);
+  const m = state.db.meta;
+  shell.innerHTML = `
+    <div class="topbar">
+      <div class="left">
+        <div class="mark" style="width:30px;height:30px;border-radius:7px;background:var(--copper);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--accent-text);font-size:14px; overflow:hidden;">${m.logoDataUrl ? `<img src="${m.logoDataUrl}" style="width:100%;height:100%;object-fit:cover;"/>` : "S"}</div>
+        <div class="who">${m.businessName||"Sade POS"} — <b>${state.currentUser.name || state.currentUser.username}</b></div>
+        <span class="role-tag">${roleLabelText}</span>
+        ${syncPillHtml()}
+      </div>
+      <div class="actions">
+        ${state.currentUser.role==="cashier" ? `<button class="btn btn-outline" id="closeDayHeaderBtn">Close day &amp; get report</button>` : ""}
+        <a class="link" id="myAccountLink">My account</a>
+        <a class="link" id="logoutLink">Sign out</a>
+      </div>
+    </div>
+    <div class="main${state.currentUser.role==="cashier"?" main-full":""}" id="mainArea"></div>
+  `;
+  el.appendChild(shell);
+  $("#logoutLink").onclick = ()=>{
+    state.currentUser = null; state.cart = []; state.appliedCoupon = null;
+    state.view = "login"; render();
+  };
+  $("#myAccountLink").onclick = openMyAccountModal;
+  if($("#closeDayHeaderBtn")) $("#closeDayHeaderBtn").onclick = openCloseDayModal;
+  wireSyncPill();
+  contentFn($("#mainArea"));
+}
+
+function openMyAccountModal(){
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>My account</h3>
+      <div class="field"><label>Display name</label><input id="maName" value="${state.currentUser.name||""}" /></div>
+      <div class="field"><label>New password (leave blank to keep current)</label><input id="maPass" type="password" /></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="maCancel">Cancel</button>
+        <button class="btn btn-primary" id="maSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#maCancel").onclick = ()=>bg.remove();
+  $("#maSave").onclick = async ()=>{
+    const user = state.db.users.find(u=>u.id===state.currentUser.id);
+    if(!user){ bg.remove(); return; }
+    const name = $("#maName").value.trim();
+    const pass = $("#maPass").value;
+    if(name){ user.name = name; state.currentUser.name = name; }
+    if(pass){ user.passwordHash = await sha256(pass); }
+    user.updatedAt = nowIso();
+    await pushToDrive();
+    bg.remove();
+    toast("Account updated", "ok");
+    render();
+  };
+}
+
+/* ================= CATEGORY / PRODUCT HELPERS ================= */
+function categoriesSorted(){
+  return (state.db.categories||[]).slice().sort((a,b)=>(a.order??0)-(b.order??0));
+}
+function sortedProducts(){
+  return state.db.products.slice().sort((a,b)=> (a.order??0) - (b.order??0));
+}
+function categoryName(catId){
+  const c = (state.db.categories||[]).find(c=>c.id===catId);
+  return c ? c.name : "Other";
+}
+
+/* ================= CASHIER VIEW ================= */
+function renderCashierView(el){
+  if(!state.db.meta.appActive){
+    el.innerHTML = `<div class="empty-state"><div class="big">⏸</div><h3>System deactivated</h3><p>Ask the developer to reactivate the system before taking sales.</p></div>`;
+    return;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "pos-layout";
+
+  const gridCol = document.createElement("div");
+
+  function buildButton(p){
+    const b = document.createElement("div");
+    b.className = "product-btn";
+    const priceLabel = (p.price===null || p.price===undefined) ? "Enter price" : money(p.price);
+    b.innerHTML = `<div class="emoji">${p.emoji||"🧾"}</div><div class="pname">${p.name}</div><div class="pprice">${priceLabel}</div>`;
+    b.onclick = ()=> addToCart(p);
+    return b;
+  }
+
+  const freeLayout = !!state.db.meta.freeLayout;
+  const layout = state.db.meta.layout || DEFAULT_LAYOUT;
+  categoriesSorted().forEach(cat=>{
+    const prods = sortedProducts().filter(p=>p.categoryId===cat.id && p.active!==false);
+    if(prods.length===0) return;
+    const section = document.createElement("div");
+    section.style.marginBottom = "18px";
+    section.innerHTML = `<h3 style="font-size:14px; margin-bottom:10px; color:var(--crema-dim);">${cat.name}</h3>`;
+    const grid = document.createElement("div");
+    grid.className = "product-grid" + (freeLayout ? " fixed-grid" : "");
+    if(freeLayout){
+      grid.style.setProperty("--grid-cols", layout.gridCols || 6);
+      grid.style.setProperty("--btn-height", (layout.btnHeight||100) + "px");
+    }
+    prods.forEach(p=> grid.appendChild(buildButton(p)));
+    section.appendChild(grid);
+    gridCol.appendChild(section);
+  });
+
+  if(state.db.products.length===0){
+    gridCol.innerHTML = `<div class="empty-state"><div class="big">🧾</div><p>No products yet. Ask the developer to add menu buttons.</p></div>` + gridCol.innerHTML;
+  }
+
+  const numpadCol = document.createElement("div");
+  numpadCol.id = "numpadHost";
+
+  const cartCol = document.createElement("div");
+  cartCol.className = "cart-panel";
+  const totals = computeCartTotals(state.cart, state.appliedCoupon);
+  cartCol.innerHTML = `
+    <div class="cart-head"><h3>Current order</h3></div>
+    <div class="cart-items" id="cartItems"></div>
+    <div class="cart-foot">
+      ${state.appliedCoupon ? `
+        <div class="applied-coupon"><span>🏷️ ${state.appliedCoupon.code} — ${state.appliedCoupon.percent}% off one drink</span><a id="removeCoupon">Remove</a></div>
+        ${totals.discountAmt===0 ? `<div style="font-size:11.5px; color:var(--crema-dim); margin-bottom:8px;">This coupon only applies to drinks — add a drink to use it.</div>` : ""}
+      ` : `
+        <button class="btn btn-outline btn-block" id="enterCouponBtn" style="margin-bottom:12px;">🏷️ Enter coupon code</button>
+      `}
+      ${totals.discountAmt>0 ? `<div class="discount-row"><span>Discount (1 drink)</span><span>−${money(totals.discountAmt)}</span></div>` : ""}
+      <div class="total-row"><span style="color:var(--crema-dim); font-size:13px;">Total</span><span class="amt">${money(totals.total)}</span></div>
+      <div class="pay-toggle">
+        <button data-pay="cash" class="${state.payMethod==='cash'?'active':''}">Cash</button>
+        <button data-pay="card" class="${state.payMethod==='card'?'active':''}">Card</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="checkoutBtn" ${state.cart.length===0?"disabled":""}>Complete sale — ${money(totals.total)}</button>
+    </div>`;
+  wrap.appendChild(gridCol);
+  wrap.appendChild(numpadCol);
+  wrap.appendChild(cartCol);
+  el.appendChild(wrap);
+  renderNumpadPanel(numpadCol);
+
+  const itemsEl = $("#cartItems");
+  if(state.cart.length===0){
+    itemsEl.innerHTML = `<div class="empty-cart">Tap a product to add it to the order.</div>`;
+  } else {
+    state.cart.forEach((item, idx)=>{
+      const row = document.createElement("div");
+      row.className = "cart-row";
+      row.innerHTML = `
+        <div><div class="ci-name">${item.name}${item.isDrink===false ? "" : " ☕"}</div><div class="ci-meta">${money(item.price)} each</div></div>
+        <div class="qty-ctrl">
+          <button data-act="dec" data-idx="${idx}">−</button>
+          <span class="mono">${item.qty}</span>
+          <button data-act="inc" data-idx="${idx}">+</button>
+        </div>`;
+      itemsEl.appendChild(row);
+    });
+    itemsEl.querySelectorAll("button[data-act]").forEach(b=>{
+      b.onclick = ()=>{
+        const idx = +b.dataset.idx;
+        if(b.dataset.act==="inc") state.cart[idx].qty++;
+        else{
+          state.cart[idx].qty--;
+          if(state.cart[idx].qty<=0) state.cart.splice(idx,1);
+        }
+        render();
+      };
+    });
+  }
+  wrap.querySelectorAll("[data-pay]").forEach(b=>{
+    b.onclick = ()=>{ state.payMethod = b.dataset.pay; render(); };
+  });
+  $("#checkoutBtn").onclick = completeSale;
+  if($("#enterCouponBtn")){
+    $("#enterCouponBtn").onclick = ()=>{
+      state.numpadTarget = { kind:"coupon" };
+      state.numpadAmount = "";
+      render();
+      const panel = document.getElementById("numpadPanel");
+      if(panel) panel.scrollIntoView({behavior:"smooth", block:"center"});
+    };
+  }
+  if($("#removeCoupon")){
+    $("#removeCoupon").onclick = ()=>{ state.appliedCoupon = null; render(); };
+  }
+}
+
+/* coupon rule: applies to ONE unit only, of the highest-priced eligible
+   ("drink") item in the cart — never multiplied across quantity or items,
+   and never applied to non-drink items. */
+function computeCartTotals(cart, coupon){
+  const subtotal = cart.reduce((s,i)=>s+i.price*i.qty,0);
+  let discountAmt = 0;
+  if(coupon){
+    const eligiblePrices = cart.filter(i=>i.isDrink!==false).map(i=>i.price);
+    if(eligiblePrices.length){
+      const maxPrice = Math.max(...eligiblePrices);
+      discountAmt = maxPrice * (coupon.percent/100);
+    }
+  }
+  const total = Math.max(0, subtotal - discountAmt);
+  return { subtotal, discountAmt, total };
+}
+
+function addToCart(product){
+  if(product.price===null || product.price===undefined){
+    // open price — hand off to the always-on numpad panel instead of adding directly
+    state.numpadTarget = { kind:"product", id: product.id, name: product.name, isDrink: product.isDrink!==false };
+    state.numpadAmount = "";
+    render();
+    const panel = document.getElementById("numpadPanel");
+    if(panel) panel.scrollIntoView({behavior:"smooth", block:"center"});
+    return;
+  }
+  const existing = state.cart.find(i=>i.productId===product.id);
+  if(existing) existing.qty++;
+  else state.cart.push({ productId: product.id, name: product.name, price: product.price, qty: 1, isDrink: product.isDrink!==false });
+  render();
+}
+
+/* ---- always-visible numpad panel (not a modal) ----
+   Locked/idle until the cashier either taps an open-price item (prices it)
+   or taps "Enter coupon code" (types a code) — it never accepts digits on
+   its own and there is no freeform "custom item" entry point anymore. */
+function renderNumpadPanel(host){
+  if(!host) return;
+  const target = state.numpadTarget;
+  const locked = !target;
+  let headerHtml, displayHtml, btnLabel;
+  if(!target){
+    headerHtml = `<div class="numpad-target"><span>Tap an item with no price, or "Enter coupon code", to begin.</span></div>`;
+    displayHtml = `—`;
+    btnLabel = "Add to cart";
+  } else if(target.kind==="coupon"){
+    headerHtml = `<div class="numpad-target"><span>Entering <b>coupon code</b></span><a id="npClearTarget">Cancel</a></div>`;
+    displayHtml = state.numpadAmount || "0";
+    btnLabel = "Apply coupon";
+  } else {
+    headerHtml = `<div class="numpad-target"><span>Entering price for <b>${target.name}</b></span><a id="npClearTarget">Cancel</a></div>`;
+    displayHtml = money(parseFloat(state.numpadAmount||"0"));
+    btnLabel = "Add to cart";
+  }
+  host.innerHTML = `
+    <div class="numpad-panel" id="numpadPanel">
+      ${headerHtml}
+      <div class="numpad-display" id="npDisplay">${displayHtml}</div>
+      <div class="numpad-grid" id="npGrid"></div>
+      <button class="btn btn-primary btn-block" id="npAddBtn" ${locked?"disabled":""}>${btnLabel}</button>
+    </div>`;
+  const grid = host.querySelector("#npGrid");
+  const keys = ["1","2","3","4","5","6","7","8","9",".","0","⌫"];
+  keys.forEach(k=>{
+    const b = document.createElement("button");
+    b.textContent = k;
+    b.disabled = locked || (k==="." && target && target.kind==="coupon"); // coupon codes are numeric-only
+    b.onclick = ()=>{
+      if(locked) return;
+      if(k==="⌫") state.numpadAmount = state.numpadAmount.slice(0,-1);
+      else if(k==="." && state.numpadAmount.includes(".")) {}
+      else state.numpadAmount += k;
+      const disp = host.querySelector("#npDisplay");
+      if(target && target.kind==="coupon") disp.textContent = state.numpadAmount || "0";
+      else disp.innerHTML = money(parseFloat(state.numpadAmount||"0"));
+    };
+    grid.appendChild(b);
+  });
+  const clearTarget = host.querySelector("#npClearTarget");
+  if(clearTarget) clearTarget.onclick = ()=>{ state.numpadTarget = null; state.numpadAmount=""; render(); };
+  host.querySelector("#npAddBtn").onclick = ()=>{
+    if(locked) return;
+    if(target.kind==="coupon"){
+      const code = state.numpadAmount.trim();
+      if(!code){ toast("Enter a code first", "err"); return; }
+      const match = (state.db.coupons||[]).find(c => c.code.toUpperCase()===code.toUpperCase() && c.active!==false);
+      if(!match){ toast("Coupon not found or inactive", "err"); return; }
+      state.appliedCoupon = { code: match.code, percent: match.percent };
+      state.numpadAmount = ""; state.numpadTarget = null;
+      render();
+      return;
+    }
+    const price = parseFloat(state.numpadAmount);
+    if(isNaN(price) || price<=0){ toast("Enter an amount first", "err"); return; }
+    // drink eligibility comes from how the developer set up this product — cashiers never choose it
+    state.cart.push({ productId: target.id, name: target.name, price, qty:1, isDrink: target.isDrink!==false });
+    state.numpadAmount = ""; state.numpadTarget = null;
+    render();
+  };
+}
+
+async function completeSale(){
+  if(state.cart.length===0) return;
+  const totals = computeCartTotals(state.cart, state.appliedCoupon);
+  const sale = {
+    id: uid(),
+    cashierId: state.currentUser.id,
+    cashierName: state.currentUser.name || state.currentUser.username,
+    items: state.cart.map(i=>({productId:i.productId, name:i.name, price:i.price, qty:i.qty, isDrink:i.isDrink!==false})),
+    subtotal: totals.subtotal,
+    couponCode: state.appliedCoupon ? state.appliedCoupon.code : null,
+    discountPercent: state.appliedCoupon ? state.appliedCoupon.percent : 0,
+    discountAmt: totals.discountAmt,
+    total: totals.total,
+    payment: state.payMethod,
+    timestamp: nowIso(),
+    date: todayStr()
+  };
+  state.db.sales.push(sale);
+  // coupons are single-use — discard it the moment it's actually used in a completed sale
+  if(state.appliedCoupon && totals.discountAmt > 0){
+    state.db.coupons = state.db.coupons.filter(c => c.code.toUpperCase() !== state.appliedCoupon.code.toUpperCase());
+  }
+  state.cart = [];
+  state.appliedCoupon = null;
+  await pushToDrive();
+  showReceiptModal(sale);
+  if(state.db.meta.autoPrintReceipt !== false){
+    printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`);
+  }
+  render();
+}
+
+function showReceiptModal(sale){
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>Sale complete</h3>
+      <div class="receipt" id="receiptContent">${receiptInnerHtml(sale)}</div>
+      <div class="modal-actions">
+        <button class="btn btn-outline btn-block" id="closeReceipt">Close</button>
+        <button class="btn btn-primary btn-block" id="printReceiptBtn">🖨️ Print again</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#closeReceipt").onclick = ()=>bg.remove();
+  $("#printReceiptBtn").onclick = ()=> printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`);
+}
+
+function receiptInnerHtml(sale){
+  const rows = `
+    <div class="rline"><span>${new Date(sale.timestamp).toLocaleString()}</span><span>${sale.cashierName}</span></div>
+    <hr/>
+    ${sale.items.map(i=>`<div class="rline"><span>${i.qty}× ${i.name}</span><span>${money(i.price*i.qty)}</span></div>`).join("")}
+    <hr/>
+    <div class="rline"><span>Subtotal</span><span>${money(sale.subtotal!=null?sale.subtotal:sale.total)}</span></div>
+    ${sale.discountAmt ? `<div class="rline"><span>Coupon ${sale.couponCode} (${sale.discountPercent}%)</span><span>−${money(sale.discountAmt)}</span></div>` : ""}
+    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(sale.total)}</span></div>
+    <div class="rline"><span>Payment</span><span style="text-transform:capitalize;">${sale.payment}</span></div>`;
+  return receiptWrap(rows);
+}
+
+function openCloseDayModal(){
+  const todaySales = state.db.sales.filter(s=>s.cashierId===state.currentUser.id && s.date===todayStr());
+  const total = todaySales.reduce((s,x)=>s+x.total,0);
+  const cash = todaySales.filter(s=>s.payment==="cash").reduce((s,x)=>s+x.total,0);
+  const card = todaySales.filter(s=>s.payment==="card").reduce((s,x)=>s+x.total,0);
+  const byProduct = {};
+  todaySales.forEach(s=>s.items.forEach(it=>{
+    byProduct[it.name] = (byProduct[it.name]||0) + it.qty;
+  }));
+  const reportRows = `
+    <div class="rline"><span>Cashier</span><span>${state.currentUser.name||state.currentUser.username}</span></div>
+    <div class="rline"><span>Date</span><span>${todayStr()}</span></div>
+    <hr/>
+    <div class="rline"><span>Transactions</span><span>${todaySales.length}</span></div>
+    <div class="rline"><span>Cash</span><span>${money(cash)}</span></div>
+    <div class="rline"><span>Card</span><span>${money(card)}</span></div>
+    <hr/>
+    ${Object.entries(byProduct).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
+    <hr/>
+    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>`;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>Close out the day</h3>
+      <div class="receipt">${receiptWrap(reportRows)}</div>
+      <p style="font-size:12px; color:var(--crema-dim); margin-top:12px;">Once closed, you'll be signed out automatically. Sign back in any time to start a new shift.</p>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="printCloseBtn">🖨️ Print</button>
+        <button class="btn btn-outline btn-block" id="cancelClose">Cancel</button>
+        <button class="btn btn-primary btn-block" id="confirmClose">Confirm close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#printCloseBtn").onclick = ()=> printHTML(`<div class="receipt">${receiptWrap(reportRows)}</div>`);
+  $("#cancelClose").onclick = ()=>bg.remove();
+  $("#confirmClose").onclick = async ()=>{
+    const report = {
+      id: uid(),
+      cashierId: state.currentUser.id,
+      cashierName: state.currentUser.name || state.currentUser.username,
+      date: todayStr(),
+      totalSales: total,
+      transactionCount: todaySales.length,
+      breakdown: { cash, card, byProduct },
+      closedAt: nowIso()
+    };
+    state.db.dayCloses.push(report);
+    await pushToDrive();
+    bg.remove();
+    toast("Day closed. Signed out — sign in again to start a new shift.", "ok");
+    state.currentUser = null; state.cart = []; state.appliedCoupon = null;
+    state.view = "login";
+    render();
+  };
+}
+
+/* ================= ADMIN VIEW (read-only) ================= */
+function renderAdminView(el){
+  const tabs = document.createElement("div");
+  tabs.className = "tabs";
+  [["live","Live sales"],["reports","Day reports"],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]].forEach(([key,label])=>{
+    const t = document.createElement("div");
+    t.className = "tab" + (state.adminTab===key ? " active":"");
+    t.textContent = label;
+    t.onclick = ()=>{ state.adminTab = key; render(); };
+    tabs.appendChild(t);
+  });
+  el.appendChild(tabs);
+
+  const body = document.createElement("div");
+  el.appendChild(body);
+
+  if(state.adminTab==="live") return renderLiveSales(body, false);
+  if(state.adminTab==="reports") return renderReportsList(body, false);
+  if(state.adminTab==="menu") return renderMenuList(body, false);
+  if(state.adminTab==="categories") return renderCategoriesList(body, false);
+  if(state.adminTab==="coupons") return renderCouponsList(body, false);
+  if(state.adminTab==="team") return renderTeamList(body, false);
+}
+
+function statsForToday(){
+  const t = state.db.sales.filter(s=>s.date===todayStr());
+  const total = t.reduce((s,x)=>s+x.total,0);
+  return { count: t.length, total, sales: t };
+}
+
+function renderLiveSales(el, editable){
+  const {count, total, sales} = statsForToday();
+  const activeCashiers = new Set(sales.map(s=>s.cashierName)).size;
+  el.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Today's revenue</div><div class="value">${money(total)}</div></div>
+      <div class="stat"><div class="label">Transactions</div><div class="value">${count}</div></div>
+      <div class="stat"><div class="label">Active cashiers today</div><div class="value">${activeCashiers}</div></div>
+      <div class="stat"><div class="label">System status</div><div class="value" style="font-size:16px; color:${state.db.meta.appActive?'var(--ok)':'var(--err)'};">${state.db.meta.appActive?'Active':'Deactivated'}</div></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:12px; font-size:15px;">Recent transactions</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Cashier</th><th>Items</th><th>Pay</th><th style="text-align:right;">Total</th></tr></thead>
+        <tbody>
+          ${sales.slice().reverse().slice(0,40).map(s=>`
+            <tr>
+              <td class="mono">${new Date(s.timestamp).toLocaleTimeString()}</td>
+              <td>${s.cashierName}</td>
+              <td>${s.items.map(i=>i.qty+"× "+i.name).join(", ")}</td>
+              <td style="text-transform:capitalize;">${s.payment}</td>
+              <td style="text-align:right;">${money(s.total)}</td>
+            </tr>`).join("") || `<tr><td colspan="5" style="text-align:center; color:var(--crema-dim); padding:24px;">No sales yet today.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderReportsList(el, editable){
+  const closes = state.db.dayCloses.slice().reverse();
+  el.innerHTML = `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="font-size:15px;">Day-close reports</h3>
+        <button class="btn btn-outline" id="exportDayClosesBtn">⬇️ Export to Excel</button>
+      </div>
+      <table>
+        <thead><tr><th>Date</th><th>Cashier</th><th>Transactions</th><th>Cash</th><th>Card</th><th style="text-align:right;">Total</th><th></th></tr></thead>
+        <tbody>
+          ${closes.map(c=>`
+            <tr>
+              <td class="mono">${c.date}</td>
+              <td>${c.cashierName}</td>
+              <td>${c.transactionCount}</td>
+              <td>${money(c.breakdown.cash)}</td>
+              <td>${money(c.breakdown.card)}</td>
+              <td style="text-align:right;">${money(c.totalSales)}</td>
+              <td><a class="link" data-print="${c.id}">Print</a>${editable?` · <a class="link" data-delete="${c.id}" style="color:var(--err);">Delete</a>`:""}</td>
+            </tr>`).join("") || `<tr><td colspan="7" style="text-align:center; color:var(--crema-dim); padding:24px;">No day-close reports yet.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+  $("#exportDayClosesBtn").onclick = exportDayClosesExcel;
+  el.querySelectorAll("[data-print]").forEach(a=>{
+    a.onclick = ()=>{
+      const c = closes.find(x=>x.id===a.dataset.print);
+      const rows = `
+        <div class="rline"><span>Cashier</span><span>${c.cashierName}</span></div>
+        <div class="rline"><span>Date</span><span>${c.date}</span></div>
+        <hr/>
+        <div class="rline"><span>Transactions</span><span>${c.transactionCount}</span></div>
+        <div class="rline"><span>Cash</span><span>${money(c.breakdown.cash)}</span></div>
+        <div class="rline"><span>Card</span><span>${money(c.breakdown.card)}</span></div>
+        <hr/>
+        ${Object.entries(c.breakdown.byProduct||{}).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
+        <hr/>
+        <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(c.totalSales)}</span></div>`;
+      printHTML(`<div class="receipt">${receiptWrap(rows)}</div>`);
+    };
+  });
+  if(editable){
+    el.querySelectorAll("[data-delete]").forEach(a=>{
+      a.onclick = async ()=>{
+        const c = closes.find(x=>x.id===a.dataset.delete);
+        if(!c) return;
+        if(!confirm(`Delete the ${c.date} report for ${c.cashierName}? This can't be undone.`)) return;
+        state.db.dayCloses = state.db.dayCloses.filter(x=>x.id!==c.id);
+        await pushToDrive();
+        toast("Report deleted", "ok");
+        render();
+      };
+    });
+  }
+
+  if(state.currentUser.role==="developer"){
+    const monthCard = document.createElement("div");
+    monthCard.className = "card";
+    monthCard.style.marginTop = "16px";
+    monthCard.innerHTML = `
+      <h3 style="font-size:15px; margin-bottom:12px;">Monthly report (Excel)</h3>
+      <div class="inline-row">
+        <div class="field"><label>Month</label><input type="month" id="monthPicker" value="${todayStr().slice(0,7)}" /></div>
+        <button class="btn btn-primary" id="monthExportBtn">⬇️ Download</button>
+      </div>`;
+    el.appendChild(monthCard);
+    $("#monthExportBtn").onclick = ()=> exportMonthlyExcel($("#monthPicker").value);
+  }
+}
+
+/* ---- Excel exports ---- */
+function exportDayClosesExcel(){
+  if(!window.XLSX){ toast("Excel library still loading, try again in a moment", "err"); return; }
+  const rows = state.db.dayCloses.map(c=>({
+    Date: c.date, Cashier: c.cashierName, Transactions: c.transactionCount,
+    Cash: c.breakdown.cash, Card: c.breakdown.card, Total: c.totalSales,
+    "Closed At": new Date(c.closedAt).toLocaleString()
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Day Closes");
+  XLSX.writeFile(wb, "sade-day-close-reports.xlsx");
+}
+
+function exportMonthlyExcel(monthValue){
+  if(!window.XLSX){ toast("Excel library still loading, try again in a moment", "err"); return; }
+  if(!monthValue){ toast("Pick a month first", "err"); return; }
+  const monthSales = state.db.sales.filter(s=>s.date.startsWith(monthValue));
+  const byDay = {};
+  monthSales.forEach(s=>{
+    byDay[s.date] = byDay[s.date] || {Date:s.date, Transactions:0, Total:0};
+    byDay[s.date].Transactions++;
+    byDay[s.date].Total += s.total;
+  });
+  const byProduct = {};
+  monthSales.forEach(s=>s.items.forEach(it=>{
+    byProduct[it.name] = byProduct[it.name] || {Item:it.name, "Qty Sold":0, Revenue:0};
+    byProduct[it.name]["Qty Sold"] += it.qty;
+    byProduct[it.name].Revenue += it.price*it.qty;
+  }));
+  const salesRows = monthSales.map(s=>({
+    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:s.cashierName,
+    Items: s.items.map(i=>i.qty+"x "+i.name).join(", "), Subtotal:s.subtotal, Discount:s.discountAmt||0,
+    Total:s.total, Payment:s.payment
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(byDay)), "Daily Summary");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(salesRows), "All Sales");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(byProduct)), "By Product");
+  XLSX.writeFile(wb, "sade-monthly-report-"+monthValue+".xlsx");
+}
+
+/* ---- menu (flat, drag-reorderable) ---- */
+function renderMenuList(el, editable){
+  const freeLayout = !!state.db.meta.freeLayout;
+  const layout = state.db.meta.layout || DEFAULT_LAYOUT;
+  function priceLabel(p){ return (p.price===null || p.price===undefined) ? "Open price" : money(p.price); }
+
+  function makeButton(p){
+    const c = document.createElement("div");
+    c.className = "product-btn" + (editable ? " draggable" : "");
+    c.style.cursor = editable ? "grab" : "default";
+    c.style.opacity = p.active===false ? "0.4" : "1";
+    c.dataset.pid = p.id;
+    c.innerHTML = `<div class="emoji">${p.emoji||"🧾"}</div><div class="pname">${p.name}</div><div class="pprice">${priceLabel(p)}</div>${freeLayout?"":`<div class="pcat">${categoryName(p.categoryId)}</div>`}`;
+    if(editable){
+      c.onclick = ()=>openProductModal(p);
+      c.draggable = true;
+      c.addEventListener("dragstart", e=>{ state.dragProductId = p.id; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
+      c.addEventListener("dragend", ()=> c.classList.remove("dragging"));
+      c.addEventListener("dragover", e=>{ e.preventDefault(); c.classList.add("drag-over"); });
+      c.addEventListener("dragleave", ()=> c.classList.remove("drag-over"));
+      c.addEventListener("drop", async e=>{
+        e.preventDefault();
+        c.classList.remove("drag-over");
+        const draggedId = state.dragProductId;
+        if(!draggedId || draggedId===p.id) return;
+        const ordered = sortedProducts();
+        const fromIdx = ordered.findIndex(x=>x.id===draggedId);
+        const toIdx = ordered.findIndex(x=>x.id===p.id);
+        if(fromIdx<0 || toIdx<0) return;
+        const [moved] = ordered.splice(fromIdx,1);
+        ordered.splice(toIdx,0,moved);
+        ordered.forEach((prod,i)=>{ prod.order = i; prod.updatedAt = nowIso(); });
+        await pushToDrive();
+        render();
+      });
+    }
+    return c;
+  }
+
+  el.innerHTML = `<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:6px;">
+      <h3 style="font-size:15px;">Menu (${editable?"editable":"view only"}) — looks just like the cashier screen</h3>
+      ${editable ? `<button class="btn btn-primary" id="addMenuBtn">➕ Add button</button>` : ""}
+    </div>
+    ${editable ? `
+      <div class="free-toggle-row">
+        <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="freeLayoutToggle" style="width:auto;" ${freeLayout?"checked":""}/> Fixed grid layout (set an exact number of columns &amp; rows instead of grouping by category)</label>
+      </div>
+      ${freeLayout ? `
+        <div class="settings-section" style="margin:14px 0;">
+          <p style="font-size:12px; color:var(--crema-dim); margin-bottom:10px;">Set how many buttons should fit across and down — they're arranged and sized automatically to fill the space evenly, in the order below.</p>
+          <div class="inline-row">
+            <div class="field"><label>Columns</label><input type="number" id="gridCols" min="2" max="14" value="${layout.gridCols||6}" /></div>
+            <div class="field"><label>Rows</label><input type="number" id="gridRows" min="1" max="10" value="${layout.gridRows||4}" /></div>
+            <button class="btn btn-primary" id="applyGridBtn">Apply</button>
+          </div>
+        </div>
+      ` : `<div class="drag-hint">Drag a button to reorder it — cashiers see the new order right away.</div>`}
+    ` : ""}
+    <div id="menuGrid"></div>
+  </div>`;
+
+  if($("#addMenuBtn")) $("#addMenuBtn").onclick = ()=>openProductModal(null);
+
+  if(editable){
+    $("#freeLayoutToggle").onchange = async e=>{
+      state.db.meta.freeLayout = e.target.checked;
+      await pushToDrive();
+      render();
+    };
+    if(freeLayout){
+      $("#applyGridBtn").onclick = async ()=>{
+        const cols = Math.max(2, parseInt($("#gridCols").value,10) || 6);
+        const rows = Math.max(1, parseInt($("#gridRows").value,10) || 4);
+        const btnHeight = 100;
+        state.db.meta.layout.gridCols = cols;
+        state.db.meta.layout.gridRows = rows;
+        state.db.meta.layout.btnHeight = btnHeight;
+        state.db.meta.layout.canvasHeight = rows * (btnHeight + 10) + 10;
+        applyLayout();
+        await pushToDrive();
+        toast(`Buttons auto-aligned to a ${cols}×${rows} grid`, "ok");
+        render();
+      };
+    }
+  }
+
+  const host = $("#menuGrid");
+  const products = sortedProducts();
+
+  categoriesSorted().forEach(cat=>{
+    const prods = products.filter(p=>p.categoryId===cat.id);
+    if(prods.length===0 && !editable) return;
+    const section = document.createElement("div");
+    section.style.marginBottom = "18px";
+    section.innerHTML = `<h3 style="font-size:14px; margin-bottom:10px; color:var(--crema-dim);">${cat.name}</h3>`;
+    const grid = document.createElement("div");
+    grid.className = "product-grid" + (freeLayout ? " fixed-grid" : "");
+    if(freeLayout){
+      grid.style.setProperty("--grid-cols", layout.gridCols || 6);
+      grid.style.setProperty("--btn-height", (layout.btnHeight||100) + "px");
+    }
+    prods.forEach(p=> grid.appendChild(makeButton(p)));
+    if(prods.length===0) grid.innerHTML = `<div style="font-size:12px; color:var(--crema-dim);">No items in this category yet.</div>`;
+    section.appendChild(grid);
+    host.appendChild(section);
+  });
+  if(products.length===0){
+    host.innerHTML = `<div class="empty-state"><div class="big">🧾</div><p>No menu buttons yet — click "Add button" above to create your first one.</p></div>`;
+  }
+}
+
+function openProductModal(product){
+  const isNew = !product;
+  const cats = categoriesSorted();
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "New menu button" : "Edit menu button"}</h3>
+      <div class="field"><label>Name</label><input id="pfName" value="${product?product.name:""}" /></div>
+      <div class="field"><label>Price (leave blank to let the cashier enter it via the numpad)</label><input id="pfPrice" type="number" step="0.01" value="${product && product.price!==null && product.price!==undefined ? product.price : ""}" placeholder="Open price" /></div>
+      <div class="field"><label>Category</label><select id="pfCat">${cats.map(c=>`<option value="${c.id}" ${product&&product.categoryId===c.id?"selected":""}>${c.name}</option>`).join("")}</select></div>
+      <div class="field"><label>Emoji</label><input id="pfEmoji" value="${product?product.emoji:"☕"}" maxlength="4" /></div>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="pfDrink" style="width:auto;" ${!product || product.isDrink!==false ? "checked":""}/> Eligible for drink coupons</label></div>
+      ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="pfActive" style="width:auto;" ${product.active!==false?"checked":""}/> Button visible to cashiers</label></div>` : ""}
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="delProd">Delete</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="cancelProd">Cancel</button>
+        <button class="btn btn-primary" id="saveProd">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#cancelProd").onclick = ()=>bg.remove();
+  $("#saveProd").onclick = async ()=>{
+    const name = $("#pfName").value.trim();
+    const priceRaw = $("#pfPrice").value.trim();
+    const price = priceRaw==="" ? null : parseFloat(priceRaw);
+    const categoryId = $("#pfCat").value;
+    const isDrink = $("#pfDrink").checked;
+    if(!name || (priceRaw!=="" && isNaN(price))){ toast("Enter a name, and either a price or leave it blank for open price","err"); return; }
+    if(isNew){
+      const maxOrder = state.db.products.reduce((m,p)=>Math.max(m, p.order??0), -1);
+      state.db.products.push({
+        id: uid(), name, price, categoryId,
+        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink, active:true, order: maxOrder+1,
+        updatedAt: nowIso()
+      });
+    } else {
+      Object.assign(product, {
+        name, price, categoryId,
+        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink,
+        active: $("#pfActive").checked, updatedAt: nowIso()
+      });
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    $("#delProd").onclick = async ()=>{
+      state.db.products = state.db.products.filter(p=>p.id!==product.id);
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
+/* ================= CATEGORIES ================= */
+function renderCategoriesList(el, editable){
+  const cats = categoriesSorted();
+  el.innerHTML = `<div class="card">
+    <h3 style="margin-bottom:6px; font-size:15px;">Categories (${editable?"editable":"view only"})</h3>
+    ${editable ? `<div class="drag-hint">Drag to reorder how categories appear on the cashier screen.</div>` : ""}
+    <div id="catList"></div>
+    ${editable?'<button class="btn btn-primary" id="addCatBtn" style="margin-top:10px;">Add category</button>':""}
+  </div>`;
+  const list = $("#catList");
+  cats.forEach(cat=>{
+    const count = state.db.products.filter(p=>p.categoryId===cat.id).length;
+    const row = document.createElement("div");
+    row.className = "cat-row";
+    row.style.cursor = editable ? "grab" : "default";
+    row.innerHTML = `<div><div class="cname">${cat.name}</div><div class="ccount">${count} item${count===1?"":"s"}</div></div>${editable?'<a class="link">Edit</a>':""}`;
+    if(editable){
+      row.draggable = true;
+      row.querySelector("a").onclick = ()=>openCategoryModal(cat);
+      row.addEventListener("dragstart", e=>{ state.dragCategoryId = cat.id; row.classList.add("dragging"); });
+      row.addEventListener("dragend", ()=> row.classList.remove("dragging"));
+      row.addEventListener("dragover", e=>{ e.preventDefault(); row.classList.add("drag-over"); });
+      row.addEventListener("dragleave", ()=> row.classList.remove("drag-over"));
+      row.addEventListener("drop", async e=>{
+        e.preventDefault();
+        row.classList.remove("drag-over");
+        const draggedId = state.dragCategoryId;
+        if(!draggedId || draggedId===cat.id) return;
+        const ordered = categoriesSorted();
+        const fromIdx = ordered.findIndex(x=>x.id===draggedId);
+        const toIdx = ordered.findIndex(x=>x.id===cat.id);
+        if(fromIdx<0 || toIdx<0) return;
+        const [moved] = ordered.splice(fromIdx,1);
+        ordered.splice(toIdx,0,moved);
+        ordered.forEach((c,i)=>{ c.order = i; });
+        await pushToDrive();
+        render();
+      });
+    }
+    list.appendChild(row);
+  });
+  if(editable){
+    $("#addCatBtn").onclick = ()=>openCategoryModal(null);
+  }
+}
+
+function openCategoryModal(cat){
+  const isNew = !cat;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "New category" : "Edit category"}</h3>
+      <div class="field"><label>Name</label><input id="ctName" value="${cat?cat.name:""}" /></div>
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="delCat">Delete</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="cancelCat">Cancel</button>
+        <button class="btn btn-primary" id="saveCat">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#cancelCat").onclick = ()=>bg.remove();
+  $("#saveCat").onclick = async ()=>{
+    const name = $("#ctName").value.trim();
+    if(!name){ toast("Name is required","err"); return; }
+    if(isNew){
+      const maxOrder = state.db.categories.reduce((m,c)=>Math.max(m,c.order??0), -1);
+      state.db.categories.push({ id: uid(), name, order: maxOrder+1 });
+    } else {
+      cat.name = name;
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    $("#delCat").onclick = async ()=>{
+      if(state.db.categories.length<=1){ toast("You need at least one category","err"); return; }
+      const remaining = state.db.categories.filter(c=>c.id!==cat.id);
+      const fallback = remaining[0];
+      state.db.products.forEach(p=>{ if(p.categoryId===cat.id) p.categoryId = fallback.id; });
+      state.db.categories = remaining;
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
+/* ================= COUPONS ================= */
+function renderCouponsList(el, editable){
+  const coupons = (state.db.coupons||[]).slice().sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0));
+  el.innerHTML = `<div class="card"><h3 style="margin-bottom:6px; font-size:15px;">Coupons (${editable?"editable":"view only"})</h3>
+    <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Coupons only discount drink items, one drink per sale (the most expensive eligible drink) — and each code works once. The moment a coupon is used in a completed sale, it's removed automatically.</p>
+    <table><thead><tr><th>Code</th><th>Discount</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
+    <tbody id="couponBody"></tbody></table>
+    ${editable?`
+      <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+        <button class="btn btn-primary" id="addCouponBtn">Add coupon</button>
+        <button class="btn btn-outline" id="uploadCsvBtn">⬆️ Upload codes from CSV</button>
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none;" />
+      </div>
+      <p style="font-size:11.5px; color:var(--crema-dim); margin-top:8px;">CSV format: one line per code, <code>code,percent</code> — e.g. <code>WELCOME10,10</code>. A header row is fine and will be skipped automatically.</p>
+    `:""}
+    </div>`;
+  const body = $("#couponBody");
+  if(coupons.length===0){
+    body.innerHTML = `<tr><td colspan="${editable?4:3}" style="text-align:center; color:var(--crema-dim); padding:24px;">No coupons yet.</td></tr>`;
+  }
+  coupons.forEach(c=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="mono">${c.code}</td><td>${c.percent}% off</td>
+      <td style="color:${c.active===false?'var(--err)':'var(--ok)'};">${c.active===false?"Disabled":"Active"}</td>
+      ${editable?`<td><a class="link" data-cid="${c.id}">Edit</a></td>`:""}`;
+    body.appendChild(tr);
+  });
+  if(editable){
+    $("#addCouponBtn").onclick = ()=>openCouponModal(null);
+    body.querySelectorAll("a[data-cid]").forEach(a=>{
+      a.onclick = ()=>openCouponModal(coupons.find(c=>c.id===a.dataset.cid));
+    });
+    $("#uploadCsvBtn").onclick = ()=> $("#csvFileInput").click();
+    $("#csvFileInput").addEventListener("change", async e=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      let added = 0, skipped = 0;
+      if(!state.db.coupons) state.db.coupons = [];
+      const existingCodes = new Set(state.db.coupons.map(c=>c.code.toUpperCase()));
+      lines.forEach(line=>{
+        const parts = line.split(",").map(p=>p.trim());
+        const code = (parts[0]||"").toUpperCase();
+        const percent = parseFloat(parts[1]);
+        if(!code || code==="CODE" || isNaN(percent) || percent<=0 || percent>100){ skipped++; return; }
+        if(existingCodes.has(code)){ skipped++; return; }
+        state.db.coupons.push({ id: uid(), code, percent, active:true, createdAt: nowIso(), updatedAt: nowIso() });
+        existingCodes.add(code);
+        added++;
+      });
+      if(added>0) await pushToDrive();
+      toast(`${added} coupon${added===1?"":"s"} added${skipped?`, ${skipped} skipped`:""}`, added>0?"ok":"err");
+      e.target.value = "";
+      render();
+    });
+  }
+}
+
+function openCouponModal(coupon){
+  const isNew = !coupon;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "New coupon" : "Edit coupon"}</h3>
+      <div class="field"><label>Code (what the cashier types)</label><input id="cfCode" value="${coupon?coupon.code:""}" style="text-transform:uppercase;" /></div>
+      <div class="field"><label>Discount percent (%)</label><input id="cfPercent" type="number" min="1" max="100" value="${coupon?coupon.percent:10}" /></div>
+      ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="cfActive" style="width:auto;" ${coupon.active!==false?"checked":""}/> Coupon active</label></div>` : ""}
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="delCoupon">Delete</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="cancelCoupon">Cancel</button>
+        <button class="btn btn-primary" id="saveCoupon">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#cancelCoupon").onclick = ()=>bg.remove();
+  $("#saveCoupon").onclick = async ()=>{
+    const code = $("#cfCode").value.trim().toUpperCase();
+    const percent = parseFloat($("#cfPercent").value);
+    if(!code || isNaN(percent) || percent<=0 || percent>100){ toast("Enter a code and a percent between 1-100","err"); return; }
+    if(!state.db.coupons) state.db.coupons = [];
+    if(isNew){
+      if(state.db.coupons.some(c=>c.code.toUpperCase()===code)){ toast("That code already exists","err"); return; }
+      state.db.coupons.push({ id: uid(), code, percent, active:true, createdAt: nowIso(), updatedAt: nowIso() });
+    } else {
+      coupon.code = code; coupon.percent = percent;
+      coupon.active = $("#cfActive").checked;
+      coupon.updatedAt = nowIso();
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    $("#delCoupon").onclick = async ()=>{
+      state.db.coupons = state.db.coupons.filter(c=>c.id!==coupon.id);
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
+/* ================= TEAM (developer accounts are never listed here) ================= */
+function renderTeamList(el, editable){
+  const visibleUsers = state.db.users.filter(u=>u.role!=="developer");
+  el.innerHTML = `<div class="card"><h3 style="margin-bottom:12px; font-size:15px;">Team (${editable?"editable":"view only"})</h3>
+    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
+    <tbody id="teamBody"></tbody></table>
+    ${editable?'<button class="btn btn-primary" id="addUserBtn" style="margin-top:14px;">Add cashier / admin</button>':""}
+    </div>`;
+  const body = $("#teamBody");
+  if(visibleUsers.length===0){
+    body.innerHTML = `<tr><td colspan="${editable?5:4}" style="text-align:center; color:var(--crema-dim); padding:24px;">No cashiers or admins yet.</td></tr>`;
+  }
+  visibleUsers.forEach(u=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${u.name}</td><td class="mono">${u.username}</td><td>${roleLabel(u.role)}</td>
+      <td style="color:${u.active===false?'var(--err)':'var(--ok)'};">${u.active===false?"Disabled":"Active"}</td>
+      ${editable?`<td><a class="link" data-uid="${u.id}">Edit</a></td>`:""}`;
+    body.appendChild(tr);
+  });
+  if(editable){
+    $("#addUserBtn").onclick = ()=>openUserModal(null);
+    body.querySelectorAll("a[data-uid]").forEach(a=>{
+      a.onclick = ()=>openUserModal(state.db.users.find(u=>u.id===a.dataset.uid));
+    });
+  }
+}
+
+function openUserModal(user){
+  const isNew = !user;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "Add team member" : "Edit team member"}</h3>
+      <div class="field"><label>Full name</label><input id="ufName" value="${user?user.name:""}" /></div>
+      <div class="field"><label>Username</label><input id="ufUser" value="${user?user.username:""}" ${user?"disabled":""} /></div>
+      <div class="field"><label>Role</label>
+        <select id="ufRole">
+          <option value="cashier" ${user&&user.role==='cashier'?'selected':''}>${roleLabel('cashier')}</option>
+          <option value="admin" ${user&&user.role==='admin'?'selected':''}>${roleLabel('admin')}</option>
+        </select>
+      </div>
+      <div class="field"><label>${isNew?"Password":"New password (leave blank to keep current)"}</label><input id="ufPass" type="password" /></div>
+      ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="ufActive" style="width:auto;" ${user.active!==false?"checked":""}/> Account active</label></div>` : ""}
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="delUser">Remove</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="cancelUser">Cancel</button>
+        <button class="btn btn-primary" id="saveUser">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("#cancelUser").onclick = ()=>bg.remove();
+  $("#saveUser").onclick = async ()=>{
+    const name = $("#ufName").value.trim();
+    const username = $("#ufUser").value.trim();
+    const role = $("#ufRole").value;
+    const pass = $("#ufPass").value;
+    if(!name || !username){ toast("Name and username are required","err"); return; }
+    if(isNew){
+      if(state.db.users.some(u=>u.username.toLowerCase()===username.toLowerCase())){
+        toast("Username already exists","err"); return;
+      }
+      if(!pass){ toast("Password is required","err"); return; }
+      const hash = await sha256(pass);
+      state.db.users.push({ id: uid(), username, passwordHash: hash, role, name, active:true, createdAt: nowIso(), updatedAt: nowIso() });
+    } else {
+      user.name = name; user.role = role; user.updatedAt = nowIso();
+      user.active = $("#ufActive").checked;
+      if(pass) user.passwordHash = await sha256(pass);
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    $("#delUser").onclick = async ()=>{
+      state.db.users = state.db.users.filter(u=>u.id!==user.id);
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
+/* ================= SETTINGS (branding, currency, receipt, colors) ================= */
+function renderSettingsPanel(el){
+  const m = state.db.meta;
+  const draft = { ...m, theme: { ...(m.theme||DEFAULT_THEME) }, layout: { ...(m.layout||DEFAULT_LAYOUT) } };
+  const isPreset = CURRENCY_PRESETS.some(c=>c.symbol===m.currencySymbol && c.code===m.currencyCode);
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="settings-section">
+        <h4>Branding</h4>
+        <div class="field"><label>Business name</label><input id="stName" value="${m.businessName||""}" /></div>
+        <div class="logo-row">
+          <div id="logoPreviewWrap">${m.logoDataUrl ? `<img class="logo-preview" id="logoPreview" src="${m.logoDataUrl}"/>` : `<div class="logo-preview empty" id="logoPreview">No logo</div>`}</div>
+          <div style="flex:1;">
+            <input type="file" id="stLogo" accept="image/*" />
+            <a class="link" id="removeLogo" style="display:${m.logoDataUrl?'inline':'none'}; margin-top:6px;">Remove logo</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Currency</h4>
+        <div class="inline-row">
+          <div class="field"><label>Preset</label>
+            <select id="stCurrencyPreset">
+              ${CURRENCY_PRESETS.map(c=>`<option value="${c.code}" ${m.currencyCode===c.code?"selected":""}>${c.code==="CUSTOM"?"Custom symbol":c.code==="TRY"?"TRY (tl)":c.code+" ("+c.symbol+")"}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field" id="customSymbolField" style="display:${m.currencyCode==='CUSTOM'?'block':'none'};"><label>Symbol</label><input id="stCustomSymbol" value="${m.currencyCode==='CUSTOM'?m.currencySymbol:''}" maxlength="4" /></div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Receipts &amp; reports</h4>
+        <div class="field"><label>Header text (address, phone — shown under the logo)</label><textarea id="stHeader">${m.receiptHeader||""}</textarea></div>
+        <div class="field"><label>Footer text (shown at the bottom)</label><textarea id="stFooter">${m.receiptFooter||"Thank you!"}</textarea></div>
+        <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="stAutoPrint" style="width:auto;" ${m.autoPrintReceipt!==false?"checked":""}/> Automatically print a receipt after every sale</label></div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Theme</h4>
+        <div style="display:flex; gap:10px; margin-bottom:14px;">
+          <button class="btn btn-outline" id="themeLightBtn" style="flex:1;">☀️ Light</button>
+          <button class="btn btn-outline" id="themeDarkBtn" style="flex:1;">🌙 Dark</button>
+        </div>
+        <p style="font-size:12px; color:var(--crema-dim); margin-bottom:10px;">Pick a starting point, then fine-tune individual colors below if you like.</p>
+        <div class="theme-grid" id="themeGrid"></div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Panel sizes</h4>
+        <p style="font-size:12px; color:var(--crema-dim); margin-bottom:10px;">Adjust how much room the numpad and order panels take up on the cashier screen.</p>
+        <div class="field"><label>Numpad width: <span id="lv_numpadWidth">${draft.layout.numpadWidth}</span>px</label><input type="range" id="ls_numpadWidth" min="220" max="420" value="${draft.layout.numpadWidth}" /></div>
+        <div class="field"><label>Order panel width: <span id="lv_cartWidth">${draft.layout.cartWidth}</span>px</label><input type="range" id="ls_cartWidth" min="280" max="480" value="${draft.layout.cartWidth}" /></div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Role names</h4>
+        <p style="font-size:12px; color:var(--crema-dim); margin-bottom:10px;">Rename how these two roles appear throughout the app — the underlying permissions don't change.</p>
+        <div class="inline-row">
+          <div class="field"><label>"Cashier" is called</label><input id="stCashierLabel" value="${(m.roleLabels&&m.roleLabels.cashier)||'Cashier'}" /></div>
+          <div class="field"><label>"Admin" is called</label><input id="stAdminLabel" value="${(m.roleLabels&&m.roleLabels.admin)||'Admin'}" /></div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="saveSettingsBtn">Save settings</button>
+    </div>`;
+
+  const fieldLabels = { bg:"Background", bg2:"Panels / cards", accent:"Accent (buttons)", accentLight:"Accent — hover", text:"Text color" };
+  const grid = $("#themeGrid");
+  function renderThemeGrid(){
+    grid.innerHTML = "";
+    Object.keys(fieldLabels).forEach(key=>{
+      const val = draft.theme[key];
+      const row = document.createElement("div");
+      row.className = "theme-swatch-field";
+      row.innerHTML = `<input type="color" id="tf_${key}" value="${val}" />
+        <div style="flex:1;"><div class="tlabel">${fieldLabels[key]}</div><div class="tval" id="tv_${key}">${val}</div></div>`;
+      grid.appendChild(row);
+      row.querySelector("input").addEventListener("input", e=>{
+        draft.theme[key] = e.target.value;
+        $("#tv_"+key).textContent = e.target.value;
+        applyThemeDraft(draft.theme);
+      });
+    });
+  }
+  renderThemeGrid();
+
+  $("#themeLightBtn").onclick = ()=>{
+    draft.theme = { ...LIGHT_THEME };
+    applyThemeDraft(draft.theme);
+    renderThemeGrid();
+  };
+  $("#themeDarkBtn").onclick = ()=>{
+    draft.theme = { ...DARK_THEME };
+    applyThemeDraft(draft.theme);
+    renderThemeGrid();
+  };
+
+  $("#stCurrencyPreset").onchange = e=>{
+    $("#customSymbolField").style.display = e.target.value==="CUSTOM" ? "block" : "none";
+  };
+
+  ["numpadWidth","cartWidth"].forEach(key=>{
+    $("#ls_"+key).addEventListener("input", e=>{
+      draft.layout[key] = parseInt(e.target.value,10);
+      $("#lv_"+key).textContent = e.target.value;
+      applyLayoutDraft(draft.layout);
+    });
+  });
+
+  $("#stLogo").addEventListener("change", e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      draft.logoDataUrl = reader.result;
+      const wrap = $("#logoPreviewWrap");
+      wrap.innerHTML = `<img class="logo-preview" id="logoPreview" src="${reader.result}"/>`;
+      $("#removeLogo").style.display = "inline";
+    };
+    reader.readAsDataURL(file);
+  });
+  $("#removeLogo").onclick = ()=>{
+    draft.logoDataUrl = null;
+    $("#logoPreviewWrap").innerHTML = `<div class="logo-preview empty" id="logoPreview">No logo</div>`;
+    $("#removeLogo").style.display = "none";
+  };
+
+  $("#saveSettingsBtn").onclick = async ()=>{
+    draft.businessName = $("#stName").value.trim() || "Sade Coffee";
+    const presetCode = $("#stCurrencyPreset").value;
+    if(presetCode==="CUSTOM"){
+      draft.currencyCode = "CUSTOM";
+      draft.currencySymbol = $("#stCustomSymbol").value.trim() || "$";
+    } else {
+      const preset = CURRENCY_PRESETS.find(c=>c.code===presetCode);
+      draft.currencyCode = preset.code;
+      draft.currencySymbol = preset.symbol;
+    }
+    draft.receiptHeader = $("#stHeader").value;
+    draft.receiptFooter = $("#stFooter").value.trim() || "Thank you!";
+    draft.autoPrintReceipt = $("#stAutoPrint").checked;
+    draft.roleLabels = {
+      cashier: $("#stCashierLabel").value.trim() || "Cashier",
+      admin: $("#stAdminLabel").value.trim() || "Admin"
+    };
+    state.db.meta = { ...state.db.meta, ...draft };
+    applyTheme();
+    await pushToDrive();
+    toast("Settings saved", "ok");
+    render();
+  };
+}
+
+/* ================= DEVELOPER VIEW ================= */
+function renderDeveloperView(el){
+  const toggleWrap = document.createElement("div");
+  toggleWrap.className = "banner " + (state.db.meta.appActive ? "" : "err");
+  toggleWrap.style.display = "flex";
+  toggleWrap.style.justifyContent = "space-between";
+  toggleWrap.style.alignItems = "center";
+  toggleWrap.style.border = "1px solid var(--line)";
+  toggleWrap.style.background = "var(--espresso-2)";
+  toggleWrap.innerHTML = `
+    <div>
+      <b>Main system ${state.db.meta.appActive ? "is active" : "is deactivated"}</b>
+      <div style="font-size:12px; color:var(--crema-dim); margin-top:2px;">Clones on cashier devices sync from Drive and follow this switch.</div>
+    </div>
+    <button class="btn ${state.db.meta.appActive ? 'btn-danger':'btn-primary'}" id="toggleActive">${state.db.meta.appActive ? "Deactivate" : "Activate"}</button>
+  `;
+  el.appendChild(toggleWrap);
+  el.appendChild(document.createElement("div")).style.height="14px";
+
+  const tabs = document.createElement("div");
+  tabs.className = "tabs";
+  [["products","Menu buttons"],["categories","Categories"],["coupons","Coupons"],["settings","Settings"],["team",`${roleLabel('cashier')}s & ${roleLabel('admin')}s`],["live","Live sales"],["reports","Day reports"]].forEach(([key,label])=>{
+    const t = document.createElement("div");
+    t.className = "tab" + (state.devTab===key ? " active":"");
+    t.textContent = label;
+    t.onclick = ()=>{ state.devTab = key; render(); };
+    tabs.appendChild(t);
+  });
+  el.appendChild(tabs);
+
+  const body = document.createElement("div");
+  el.appendChild(body);
+
+  $("#toggleActive").onclick = async ()=>{
+    state.db.meta.appActive = !state.db.meta.appActive;
+    await pushToDrive();
+    render();
+  };
+
+  if(state.devTab==="products") return renderMenuList(body, true);
+  if(state.devTab==="categories") return renderCategoriesList(body, true);
+  if(state.devTab==="coupons") return renderCouponsList(body, true);
+  if(state.devTab==="settings") return renderSettingsPanel(body);
+  if(state.devTab==="team") return renderTeamList(body, true);
+  if(state.devTab==="live") return renderLiveSales(body, true);
+  if(state.devTab==="reports") return renderReportsList(body, true);
+}
+
+/* ---------------- boot ---------------- */
+init();
+</script>
+</body>
+</html>
