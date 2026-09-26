@@ -10,7 +10,6 @@
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
@@ -342,18 +341,18 @@
 
 <script>
 /* =========================================================================
-   SADE POS — single-file PWA point of sale backed by Google Drive.
+   SADE POS — single-file PWA point of sale backed by a private GitHub repo.
    Roles: developer (build/manage, hidden from the team list),
           admin (view-only), cashier (sell).
    ========================================================================= */
 
 /* ---------------- CONFIG ----------------
-   Fill these in from your own Google Cloud project. Nothing will work
-   until CLIENT_ID is set (see the in-app Setup screen for exact steps). */
+   Fill these in to match your own private GitHub repository (see the
+   in-app Setup screen for exact steps). */
 const CONFIG = {
-  CLIENT_ID: "319032841328-ksej3cr37qt7523kirlruhl4v9qer2ra.apps.googleusercontent.com",
-  DB_FILENAME: "sade_pos_db.json",
-  SCOPES: "https://www.googleapis.com/auth/drive",
+  GITHUB_OWNER: "sade-acct",       // GitHub username that owns the private data repo
+  GITHUB_REPO: "sade-pos-data",    // a separate PRIVATE repo — never the public site repo
+  DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
 
@@ -374,8 +373,8 @@ const CURRENCY_PRESETS = [
 
 /* ---------------- STATE ---------------- */
 const state = {
-  accessToken: null,
-  tokenClient: null,
+  accessToken: null,   // GitHub Personal Access Token
+  fileSha: null,       // current known blob sha of the database file (GitHub requires this to write)
   dbFileId: null,
   db: null,
   currentUser: null,
@@ -637,7 +636,7 @@ function receiptWrap(innerRowsHtml){
    NOTE: uses localStorage, which only works once this file is hosted on
    its own real address (GitHub Pages, etc) — not inside Claude's in-chat
    preview. It's a safety net so a dropped connection mid-shift doesn't
-   lose sales; it is not a substitute for the Drive database. */
+   lose sales; it is not a substitute for the GitHub-hosted database. */
 function cacheKey(){ return "sade_cache_" + CONFIG.DB_FILENAME; }
 function saveLocalCache(){
   try{ localStorage.setItem(cacheKey(), JSON.stringify({ dbFileId: state.dbFileId, db: state.db })); }catch(e){}
@@ -646,73 +645,96 @@ function loadLocalCache(){
   try{ const raw = localStorage.getItem(cacheKey()); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
 }
 
-/* ================= GOOGLE DRIVE LAYER ================= */
-
-function gisReady(){
-  return new Promise(resolve=>{
-    const check = () => (window.google && google.accounts && google.accounts.oauth2) ? resolve() : setTimeout(check,100);
-    check();
-  });
-}
-
-async function connectDrive(){
-  await gisReady();
-  return new Promise((resolve,reject)=>{
-    state.tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: CONFIG.CLIENT_ID,
-      scope: CONFIG.SCOPES,
-      callback: (resp)=>{
-        if(resp.error){ reject(resp); return; }
-        state.accessToken = resp.access_token;
-        resolve(resp.access_token);
-      }
-    });
-    state.tokenClient.requestAccessToken({prompt: ""});
-  });
-}
+/* ================= GITHUB STORAGE LAYER =================
+   Same role Google Drive used to play — one JSON file is the whole database.
+   Function names (connectDrive, driveReadFile, driveWriteFile, authHeaders,
+   pushToDrive, pullFromDrive...) are kept as-is throughout the app even
+   though the backend is now GitHub, so nothing elsewhere had to change. */
 
 function authHeaders(){
-  return { "Authorization": "Bearer " + state.accessToken };
+  return { "Authorization": "token " + state.accessToken, "Accept": "application/vnd.github+json" };
+}
+function ghApiUrl(){
+  return `https://api.github.com/repos/${CONFIG.GITHUB_OWNER}/${CONFIG.GITHUB_REPO}/contents/${CONFIG.DB_FILENAME}`;
+}
+/* UTF-8 safe base64 (GitHub's Contents API stores file bodies as base64) */
+function utf8ToBase64(str){ return btoa(unescape(encodeURIComponent(str))); }
+function base64ToUtf8(str){ return decodeURIComponent(escape(atob(str.replace(/\n/g,"")))); }
+
+/* "Connecting" now just means validating the pasted token works, rather
+   than an OAuth popup flow. */
+async function connectDrive(){
+  if(!state.accessToken) throw new Error("No access token set");
+  const res = await fetch(ghApiUrl(), { headers: authHeaders() });
+  if(res.status === 401 || res.status === 403) throw new Error("Invalid or expired token");
+  // 404 is fine here — it just means the database file doesn't exist yet.
 }
 
 async function driveFindDbFile(){
-  const q = encodeURIComponent(`name='${CONFIG.DB_FILENAME}' and trashed=false`);
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`, {headers: authHeaders()});
-  if(!res.ok) throw new Error("Drive list failed: "+res.status);
+  const res = await fetch(ghApiUrl(), { headers: authHeaders() });
+  if(res.status === 404) return null;
+  if(!res.ok) throw new Error("GitHub read failed: "+res.status);
   const data = await res.json();
-  return data.files && data.files.length ? data.files[0] : null;
+  state.fileSha = data.sha;
+  return { id: CONFIG.DB_FILENAME };
 }
 
 async function driveCreateDbFile(dbObj){
-  const boundary = "sade-boundary";
-  const metadata = { name: CONFIG.DB_FILENAME, mimeType: "application/json" };
-  const body =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(dbObj)}\r\n` +
-    `--${boundary}--`;
-  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
-    method:"POST",
-    headers:{ ...authHeaders(), "Content-Type": `multipart/related; boundary=${boundary}` },
-    body
+  const res = await fetch(ghApiUrl(), {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: "Initialize Sade POS database",
+      content: utf8ToBase64(JSON.stringify(dbObj, null, 2))
+    })
   });
-  if(!res.ok) throw new Error("Drive create failed: "+res.status);
+  if(!res.ok) throw new Error("GitHub create failed: "+res.status);
   const data = await res.json();
-  return data.id;
+  state.fileSha = data.content.sha;
+  return CONFIG.DB_FILENAME;
 }
 
 async function driveReadFile(fileId){
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {headers: authHeaders()});
-  if(!res.ok) throw new Error("Drive read failed: "+res.status);
-  return await res.json();
+  const res = await fetch(ghApiUrl(), { headers: authHeaders() });
+  if(!res.ok) throw new Error("GitHub read failed: "+res.status);
+  const data = await res.json();
+  state.fileSha = data.sha;
+  return JSON.parse(base64ToUtf8(data.content));
 }
 
 async function driveWriteFile(fileId, dbObj){
-  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-    method:"PATCH",
-    headers:{ ...authHeaders(), "Content-Type":"application/json" },
-    body: JSON.stringify(dbObj)
+  const res = await fetch(ghApiUrl(), {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: "Update Sade POS data",
+      content: utf8ToBase64(JSON.stringify(dbObj, null, 2)),
+      sha: state.fileSha
+    })
   });
-  if(!res.ok) throw new Error("Drive write failed: "+res.status);
+  if(res.status === 409 || res.status === 422){
+    // our copy of the file's sha is stale — someone else saved first.
+    // Re-fetch, merge their changes into ours, and retry once with the
+    // fresh sha, the same spirit as the old Drive merge-before-write.
+    const remote = await driveReadFile();
+    state.db = migrateDb(mergeDb(dbObj, remote));
+    const retry = await fetch(ghApiUrl(), {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Update Sade POS data (merged)",
+        content: utf8ToBase64(JSON.stringify(state.db, null, 2)),
+        sha: state.fileSha
+      })
+    });
+    if(!retry.ok) throw new Error("GitHub write failed: "+retry.status);
+    const data = await retry.json();
+    state.fileSha = data.content.sha;
+    return;
+  }
+  if(!res.ok) throw new Error("GitHub write failed: "+res.status);
+  const data = await res.json();
+  state.fileSha = data.content.sha;
 }
 
 /* merge remote + local: newer 'updatedAt' wins per-record; sales/dayCloses union by id */
@@ -788,10 +810,10 @@ async function flushOffline(){
   if(!state.dbFileId || !navigator.onLine) return;
   try{
     if(!state.accessToken){
-      // booted from local cache with no live session yet — get a token first.
-      // Browsers can block an auto-opened popup that isn't from a direct click,
-      // so this is best-effort; the sync pill offers a manual retry either way.
-      await connectDrive();
+      // no token in memory at all (device never connected, or it was cleared
+      // because a previous call found it invalid) — nothing to retry
+      // automatically; the sync pill routes to the connect screen instead.
+      return;
     }
     const remote = await driveReadFile(state.dbFileId);
     state.db = migrateDb(mergeDb(state.db, remote));
@@ -802,7 +824,16 @@ async function flushOffline(){
     startSyncLoop();
     toast("Back online — synced", "ok");
     render();
-  }catch(e){ console.warn("flush failed", e); }
+  }catch(e){
+    console.warn("flush failed", e);
+    if(String(e.message||"").match(/40[13]/)){
+      // the token no longer works (revoked/expired) — clear it so the
+      // person is prompted to paste a fresh one, rather than retrying forever
+      state.accessToken = null;
+      clearSavedToken();
+      renderIfLive();
+    }
+  }
 }
 
 function startSyncLoop(){
@@ -824,14 +855,17 @@ function renderIfLive(){
 }
 function syncPillHtml(){
   if(!state.accessToken){
-    return `<span class="pill" id="syncPill" style="cursor:pointer; border-color:var(--copper);"><span class="dot offline"></span>Tap to connect to Drive</span>`;
+    return `<span class="pill" id="syncPill" style="cursor:pointer; border-color:var(--copper);"><span class="dot offline"></span>Tap to connect</span>`;
   }
   const offline = state.offlinePending || !navigator.onLine;
   return `<span class="pill" id="syncPill"${offline?' style="cursor:pointer;"':''}><span class="dot ${offline?'offline':'live'}"></span>${offline ? "Offline — tap to retry" : (state.saving ? "Syncing…" : "Live")}</span>`;
 }
 function wireSyncPill(){
   const pill = document.getElementById("syncPill");
-  if(pill && (!state.accessToken || state.offlinePending)){
+  if(!pill) return;
+  if(!state.accessToken){
+    pill.onclick = ()=>{ state.view = "connect"; render(); };
+  } else if(state.offlinePending){
     pill.onclick = ()=> flushOffline();
   }
 }
@@ -847,10 +881,17 @@ window.addEventListener("offline", ()=>{
 
 async function tryLogin(username, password){
   const hash = await sha256(password);
-  const user = state.db.users.find(u => u.username.toLowerCase() === username.trim().toLowerCase() && u.active !== false);
+  const user = activeUsers().find(u => u.username.toLowerCase() === username.trim().toLowerCase() && u.active !== false);
   if(!user || user.passwordHash !== hash) return null;
   return user;
 }
+
+/* saved access token lives in its own localStorage key, separate from the
+   app-data cache, so it survives independently and is never written into
+   the synced database itself */
+function saveToken(pat){ try{ localStorage.setItem("sade_gh_pat", pat); }catch(e){} }
+function loadSavedToken(){ try{ return localStorage.getItem("sade_gh_pat"); }catch(e){ return null; } }
+function clearSavedToken(){ try{ localStorage.removeItem("sade_gh_pat"); }catch(e){} }
 
 /* ================= INIT / BOOTSTRAP ================= */
 
@@ -863,17 +904,18 @@ async function init(){
   if(screen.orientation && screen.orientation.lock){
     screen.orientation.lock("landscape").catch(()=>{});
   }
-  if(CONFIG.CLIENT_ID.includes("YOUR_GOOGLE_OAUTH_CLIENT_ID")){
+  if(CONFIG.GITHUB_OWNER.includes("YOUR_") || CONFIG.GITHUB_REPO.includes("YOUR_")){
     state.view = "setup";
     render();
     return;
   }
 
+  const savedToken = loadSavedToken();
+  if(savedToken) state.accessToken = savedToken;
+
   // If this device has synced before, boot straight into the app from the
   // local cache — no network required — so the PWA is usable offline from a
-  // cold start, not just mid-session. If we're online, try a quiet reconnect;
-  // if that's blocked (browsers can block auto-opened popups with no direct
-  // click behind them) the top bar's sync pill offers a manual retry.
+  // cold start, not just mid-session.
   const cached = loadLocalCache();
   if(cached && cached.db){
     state.dbFileId = cached.dbFileId;
@@ -881,7 +923,7 @@ async function init(){
     applyTheme();
     state.view = "login";
     render();
-    flushOffline();
+    if(state.accessToken) flushOffline();
     return;
   }
 
@@ -898,9 +940,14 @@ async function seedDefaultDbUsers(db){
 }
 
 async function handleConnect(){
+  const patInput = document.getElementById("patInput");
+  const pat = (patInput ? patInput.value.trim() : "") || state.accessToken;
+  if(!pat){ toast("Paste your access token first", "err"); return; }
+  state.accessToken = pat;
   try{
     await connectDrive();
-    toast("Connected to Google Drive", "ok");
+    saveToken(pat);
+    toast("Connected", "ok");
     let file = await driveFindDbFile();
     if(!file){
       const fresh = defaultDb();
@@ -908,7 +955,7 @@ async function handleConnect(){
       const id = await driveCreateDbFile(fresh);
       state.dbFileId = id;
       state.db = migrateDb(fresh);
-      toast("Created new database on Drive", "ok");
+      toast("Created new database", "ok");
       await pushToDrive();
     } else {
       state.dbFileId = file.id;
@@ -925,7 +972,7 @@ async function handleConnect(){
     render();
   }catch(e){
     console.error(e);
-    toast("Could not connect to Google Drive. Check console / Client ID.", "err");
+    toast("Could not connect. Check your token, repository name, and permissions.", "err");
   }
 }
 
@@ -947,21 +994,22 @@ function renderSetupScreen(el){
   const wrap = document.createElement("div");
   wrap.className = "center-screen";
   wrap.innerHTML = `
-    <div class="panel" style="max-width:520px;">
+    <div class="panel" style="max-width:560px;">
       <div class="brand"><div class="mark">S</div><div><div class="name">Sade POS</div><div class="sub">SETUP REQUIRED</div></div></div>
       <div class="card">
-        <h3 style="margin-bottom:12px;">Connect this app to Google Drive</h3>
+        <h3 style="margin-bottom:12px;">Connect this app to its GitHub data repository</h3>
         <p style="font-size:13px; color:var(--paper-dim); line-height:1.6; margin-bottom:14px;">
-          This app stores everything (products, users, sales, reports) in one JSON file on Google Drive.
-          Before it can run, you need your own free Google OAuth Client ID.
+          This app stores everything (products, users, sales, reports) in one JSON file kept in a
+          private GitHub repository — a repository separate from the one hosting this app itself,
+          so your business data is never publicly visible.
         </p>
         <ol class="setup-steps" style="padding-left:18px;">
-          <li>Go to <code>console.cloud.google.com</code> and create a project.</li>
-          <li>Enable the <b>Google Drive API</b>.</li>
-          <li>Fill in the <b>Branding</b> page and add your Google account as a <b>test user</b> under Audience.</li>
-          <li>Go to <b>Clients → Create Client</b>, type <b>Web application</b>.</li>
-          <li>Under <b>Authorized JavaScript origins</b>, add the URL this file is hosted on.</li>
-          <li>Copy the generated Client ID into <code>CONFIG.CLIENT_ID</code> near the top of this file's script, then reload.</li>
+          <li>On GitHub, create a new repository, and set its visibility to <b>Private</b>. This holds only the data file — never make it Public.</li>
+          <li>Set <code>CONFIG.GITHUB_OWNER</code> and <code>CONFIG.GITHUB_REPO</code> near the top of this file's script to match that repository's owner and name, then reload.</li>
+          <li>On GitHub, go to <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+          <li>Under <b>Repository access</b>, choose <b>"Only select repositories"</b> and pick just the private data repo from step 1.</li>
+          <li>Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>. Leave everything else untouched.</li>
+          <li>Generate the token, copy it (it's shown only once), and paste it into the connect screen on each device that needs access.</li>
         </ol>
       </div>
     </div>`;
@@ -976,19 +1024,25 @@ function renderConnectScreen(el){
     <div class="panel">
       <div class="brand"><div class="mark">S</div><div><div class="name">Sade POS</div><div class="sub">COFFEE SHOP SYSTEM</div></div></div>
       <div class="card">
-        <h3 style="margin-bottom:8px;">Connect to Google Drive</h3>
-        <p style="font-size:13px; color:var(--paper-dim); margin-bottom:18px; line-height:1.5;">
-          Sign in with the shop's Google account. This device will read and write the shared sales database.
+        <h3 style="margin-bottom:8px;">Connect this device</h3>
+        <p style="font-size:13px; color:var(--paper-dim); margin-bottom:14px; line-height:1.5;">
+          Paste the shop's access token below. This device will then read and write the shared sales
+          database. You only need to do this once per device — it's remembered afterward.
         </p>
-        <button class="btn btn-primary btn-block" id="connectBtn">Connect Google Drive</button>
+        <div class="field"><input id="patInput" type="password" placeholder="Paste your access token" autocomplete="off" /></div>
+        <button class="btn btn-primary btn-block" id="connectBtn">Connect</button>
       </div>
     </div>`;
   el.appendChild(wrap);
-  $("#connectBtn").onclick = ()=>{
+  const doConnect = ()=>{
     $("#connectBtn").disabled = true;
     $("#connectBtn").textContent = "Connecting…";
-    handleConnect();
+    handleConnect().finally(()=>{
+      if($("#connectBtn")){ $("#connectBtn").disabled = false; $("#connectBtn").textContent = "Connect"; }
+    });
   };
+  $("#connectBtn").onclick = doConnect;
+  $("#patInput").addEventListener("keydown", e=>{ if(e.key==="Enter") doConnect(); });
 }
 
 /* ---------------- LOGIN SCREEN ---------------- */
@@ -1078,7 +1132,7 @@ function openMyAccountModal(){
   document.body.appendChild(bg);
   $("#maCancel").onclick = ()=>bg.remove();
   $("#maSave").onclick = async ()=>{
-    const user = state.db.users.find(u=>u.id===state.currentUser.id);
+    const user = activeUsers().find(u=>u.id===state.currentUser.id);
     if(!user){ bg.remove(); return; }
     const name = $("#maName").value.trim();
     const pass = $("#maPass").value;
@@ -1092,15 +1146,26 @@ function openMyAccountModal(){
   };
 }
 
-/* ================= CATEGORY / PRODUCT HELPERS ================= */
+/* ================= CATEGORY / PRODUCT / USER / COUPON HELPERS =================
+   Deleting a record can't just remove it from the local array — a device that
+   hasn't synced the deletion yet would "resurrect" it on its next merge, since
+   the merge logic only knows how to combine records, not represent an absence.
+   So a delete instead soft-deletes (deleted:true + updatedAt), and every read
+   site filters those out — the tombstone itself still syncs like any edit. */
 function categoriesSorted(){
-  return (state.db.categories||[]).slice().sort((a,b)=>(a.order??0)-(b.order??0));
+  return (state.db.categories||[]).filter(c=>!c.deleted).slice().sort((a,b)=>(a.order??0)-(b.order??0));
 }
 function sortedProducts(){
-  return state.db.products.slice().sort((a,b)=> (a.order??0) - (b.order??0));
+  return state.db.products.filter(p=>!p.deleted).slice().sort((a,b)=> (a.order??0) - (b.order??0));
+}
+function activeUsers(){
+  return (state.db.users||[]).filter(u=>!u.deleted);
+}
+function activeCoupons(){
+  return (state.db.coupons||[]).filter(c=>!c.deleted);
 }
 function categoryName(catId){
-  const c = (state.db.categories||[]).find(c=>c.id===catId);
+  const c = (state.db.categories||[]).find(c=>c.id===catId && !c.deleted);
   return c ? c.name : "Other";
 }
 
@@ -1144,7 +1209,7 @@ function renderCashierView(el){
     gridCol.appendChild(section);
   });
 
-  if(state.db.products.length===0){
+  if(sortedProducts().length===0){
     gridCol.innerHTML = `<div class="empty-state"><div class="big">🧾</div><p>No products yet. Ask the developer to add menu buttons.</p></div>` + gridCol.innerHTML;
   }
 
@@ -1310,7 +1375,7 @@ function renderNumpadPanel(host){
     if(target.kind==="coupon"){
       const code = state.numpadAmount.trim();
       if(!code){ toast("Enter a code first", "err"); return; }
-      const match = (state.db.coupons||[]).find(c => c.code.toUpperCase()===code.toUpperCase() && c.active!==false);
+      const match = activeCoupons().find(c => c.code.toUpperCase()===code.toUpperCase() && c.active!==false);
       if(!match){ toast("Coupon not found or inactive", "err"); return; }
       state.appliedCoupon = { code: match.code, percent: match.percent };
       state.numpadAmount = ""; state.numpadTarget = null;
@@ -1346,7 +1411,8 @@ async function completeSale(){
   state.db.sales.push(sale);
   // coupons are single-use — discard it the moment it's actually used in a completed sale
   if(state.appliedCoupon && totals.discountAmt > 0){
-    state.db.coupons = state.db.coupons.filter(c => c.code.toUpperCase() !== state.appliedCoupon.code.toUpperCase());
+    const used = state.db.coupons.find(c => c.code.toUpperCase() === state.appliedCoupon.code.toUpperCase());
+    if(used){ used.deleted = true; used.active = false; used.updatedAt = nowIso(); }
   }
   state.cart = [];
   state.appliedCoupon = null;
@@ -1397,6 +1463,9 @@ function openCloseDayModal(){
   todaySales.forEach(s=>s.items.forEach(it=>{
     byProduct[it.name] = (byProduct[it.name]||0) + it.qty;
   }));
+  const couponsUsed = todaySales.filter(s=>s.couponCode && s.discountAmt>0)
+    .map(s=>({ code:s.couponCode, percent:s.discountPercent, discountAmt:s.discountAmt }));
+  const couponsDiscountTotal = couponsUsed.reduce((s,c)=>s+c.discountAmt,0);
   const reportRows = `
     <div class="rline"><span>Cashier</span><span>${state.currentUser.name||state.currentUser.username}</span></div>
     <div class="rline"><span>Date</span><span>${todayStr()}</span></div>
@@ -1406,6 +1475,7 @@ function openCloseDayModal(){
     <div class="rline"><span>Card</span><span>${money(card)}</span></div>
     <hr/>
     ${Object.entries(byProduct).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
+    ${couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${couponsUsed.length}</span></div>${couponsUsed.map(c=>`<div class="rline"><span>&nbsp;&nbsp;${c.code} (${c.percent}%)</span><span>−${money(c.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(couponsDiscountTotal)}</span></div>` : ""}
     <hr/>
     <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>`;
   const bg = document.createElement("div");
@@ -1432,7 +1502,7 @@ function openCloseDayModal(){
       date: todayStr(),
       totalSales: total,
       transactionCount: todaySales.length,
-      breakdown: { cash, card, byProduct },
+      breakdown: { cash, card, byProduct, couponsUsed, couponsDiscountTotal },
       closedAt: nowIso()
     };
     state.db.dayCloses.push(report);
@@ -1478,17 +1548,19 @@ function statsForToday(){
 function renderLiveSales(el, editable){
   const {count, total, sales} = statsForToday();
   const activeCashiers = new Set(sales.map(s=>s.cashierName)).size;
+  const couponsUsedToday = sales.filter(s=>s.couponCode && s.discountAmt>0);
   el.innerHTML = `
     <div class="stat-grid">
       <div class="stat"><div class="label">Today's revenue</div><div class="value">${money(total)}</div></div>
       <div class="stat"><div class="label">Transactions</div><div class="value">${count}</div></div>
       <div class="stat"><div class="label">Active cashiers today</div><div class="value">${activeCashiers}</div></div>
+      <div class="stat"><div class="label">Coupons used today</div><div class="value">${couponsUsedToday.length}</div></div>
       <div class="stat"><div class="label">System status</div><div class="value" style="font-size:16px; color:${state.db.meta.appActive?'var(--ok)':'var(--err)'};">${state.db.meta.appActive?'Active':'Deactivated'}</div></div>
     </div>
     <div class="card">
       <h3 style="margin-bottom:12px; font-size:15px;">Recent transactions</h3>
       <table>
-        <thead><tr><th>Time</th><th>Cashier</th><th>Items</th><th>Pay</th><th style="text-align:right;">Total</th></tr></thead>
+        <thead><tr><th>Time</th><th>Cashier</th><th>Items</th><th>Pay</th><th>Coupon</th><th style="text-align:right;">Total</th></tr></thead>
         <tbody>
           ${sales.slice().reverse().slice(0,40).map(s=>`
             <tr>
@@ -1496,8 +1568,9 @@ function renderLiveSales(el, editable){
               <td>${s.cashierName}</td>
               <td>${s.items.map(i=>i.qty+"× "+i.name).join(", ")}</td>
               <td style="text-transform:capitalize;">${s.payment}</td>
+              <td class="mono">${s.couponCode && s.discountAmt>0 ? `${s.couponCode} (−${money(s.discountAmt)})` : "—"}</td>
               <td style="text-align:right;">${money(s.total)}</td>
-            </tr>`).join("") || `<tr><td colspan="5" style="text-align:center; color:var(--crema-dim); padding:24px;">No sales yet today.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="6" style="text-align:center; color:var(--crema-dim); padding:24px;">No sales yet today.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1512,7 +1585,7 @@ function renderReportsList(el, editable){
         <button class="btn btn-outline" id="exportDayClosesBtn">⬇️ Export to Excel</button>
       </div>
       <table>
-        <thead><tr><th>Date</th><th>Cashier</th><th>Transactions</th><th>Cash</th><th>Card</th><th style="text-align:right;">Total</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Cashier</th><th>Transactions</th><th>Cash</th><th>Card</th><th>Coupons</th><th style="text-align:right;">Total</th><th></th></tr></thead>
         <tbody>
           ${closes.map(c=>`
             <tr>
@@ -1521,9 +1594,10 @@ function renderReportsList(el, editable){
               <td>${c.transactionCount}</td>
               <td>${money(c.breakdown.cash)}</td>
               <td>${money(c.breakdown.card)}</td>
+              <td>${(c.breakdown.couponsUsed||[]).length ? `${c.breakdown.couponsUsed.length} (−${money(c.breakdown.couponsDiscountTotal||0)})` : "—"}</td>
               <td style="text-align:right;">${money(c.totalSales)}</td>
               <td><a class="link" data-print="${c.id}">Print</a>${editable?` · <a class="link" data-delete="${c.id}" style="color:var(--err);">Delete</a>`:""}</td>
-            </tr>`).join("") || `<tr><td colspan="7" style="text-align:center; color:var(--crema-dim); padding:24px;">No day-close reports yet.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="8" style="text-align:center; color:var(--crema-dim); padding:24px;">No day-close reports yet.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1531,6 +1605,7 @@ function renderReportsList(el, editable){
   el.querySelectorAll("[data-print]").forEach(a=>{
     a.onclick = ()=>{
       const c = closes.find(x=>x.id===a.dataset.print);
+      const couponsUsed = c.breakdown.couponsUsed||[];
       const rows = `
         <div class="rline"><span>Cashier</span><span>${c.cashierName}</span></div>
         <div class="rline"><span>Date</span><span>${c.date}</span></div>
@@ -1540,6 +1615,7 @@ function renderReportsList(el, editable){
         <div class="rline"><span>Card</span><span>${money(c.breakdown.card)}</span></div>
         <hr/>
         ${Object.entries(c.breakdown.byProduct||{}).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
+        ${couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${couponsUsed.length}</span></div>${couponsUsed.map(cu=>`<div class="rline"><span>&nbsp;&nbsp;${cu.code} (${cu.percent}%)</span><span>−${money(cu.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(c.breakdown.couponsDiscountTotal||0)}</span></div>` : ""}
         <hr/>
         <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(c.totalSales)}</span></div>`;
       printHTML(`<div class="receipt">${receiptWrap(rows)}</div>`);
@@ -1579,7 +1655,10 @@ function exportDayClosesExcel(){
   if(!window.XLSX){ toast("Excel library still loading, try again in a moment", "err"); return; }
   const rows = state.db.dayCloses.map(c=>({
     Date: c.date, Cashier: c.cashierName, Transactions: c.transactionCount,
-    Cash: c.breakdown.cash, Card: c.breakdown.card, Total: c.totalSales,
+    Cash: c.breakdown.cash, Card: c.breakdown.card,
+    "Coupons Used": (c.breakdown.couponsUsed||[]).length,
+    "Coupon Discount Total": c.breakdown.couponsDiscountTotal||0,
+    Total: c.totalSales,
     "Closed At": new Date(c.closedAt).toLocaleString()
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -1606,13 +1685,19 @@ function exportMonthlyExcel(monthValue){
   }));
   const salesRows = monthSales.map(s=>({
     Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:s.cashierName,
-    Items: s.items.map(i=>i.qty+"x "+i.name).join(", "), Subtotal:s.subtotal, Discount:s.discountAmt||0,
+    Items: s.items.map(i=>i.qty+"x "+i.name).join(", "), Subtotal:s.subtotal,
+    Coupon: s.discountAmt>0 ? s.couponCode : "", Discount:s.discountAmt||0,
     Total:s.total, Payment:s.payment
+  }));
+  const couponRows = monthSales.filter(s=>s.discountAmt>0 && s.couponCode).map(s=>({
+    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:s.cashierName,
+    Code:s.couponCode, Percent:s.discountPercent, "Discount Given":s.discountAmt
   }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(byDay)), "Daily Summary");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(salesRows), "All Sales");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(byProduct)), "By Product");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(couponRows.length?couponRows:[{Date:"",Time:"",Cashier:"",Code:"",Percent:"",  "Discount Given":""}]), "Coupons Used");
   XLSX.writeFile(wb, "sade-monthly-report-"+monthValue+".xlsx");
 }
 
@@ -1777,7 +1862,7 @@ function openProductModal(product){
   };
   if(!isNew){
     $("#delProd").onclick = async ()=>{
-      state.db.products = state.db.products.filter(p=>p.id!==product.id);
+      product.deleted = true; product.active = false; product.updatedAt = nowIso();
       await pushToDrive();
       bg.remove();
       render();
@@ -1796,7 +1881,7 @@ function renderCategoriesList(el, editable){
   </div>`;
   const list = $("#catList");
   cats.forEach(cat=>{
-    const count = state.db.products.filter(p=>p.categoryId===cat.id).length;
+    const count = sortedProducts().filter(p=>p.categoryId===cat.id).length;
     const row = document.createElement("div");
     row.className = "cat-row";
     row.style.cursor = editable ? "grab" : "default";
@@ -1862,11 +1947,11 @@ function openCategoryModal(cat){
   };
   if(!isNew){
     $("#delCat").onclick = async ()=>{
-      if(state.db.categories.length<=1){ toast("You need at least one category","err"); return; }
-      const remaining = state.db.categories.filter(c=>c.id!==cat.id);
+      const remaining = categoriesSorted().filter(c=>c.id!==cat.id);
+      if(remaining.length===0){ toast("You need at least one category","err"); return; }
       const fallback = remaining[0];
-      state.db.products.forEach(p=>{ if(p.categoryId===cat.id) p.categoryId = fallback.id; });
-      state.db.categories = remaining;
+      state.db.products.forEach(p=>{ if(p.categoryId===cat.id) { p.categoryId = fallback.id; p.updatedAt = nowIso(); } });
+      cat.deleted = true; cat.updatedAt = nowIso();
       await pushToDrive();
       bg.remove();
       render();
@@ -1876,7 +1961,7 @@ function openCategoryModal(cat){
 
 /* ================= COUPONS ================= */
 function renderCouponsList(el, editable){
-  const coupons = (state.db.coupons||[]).slice().sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0));
+  const coupons = activeCoupons().slice().sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0));
   el.innerHTML = `<div class="card"><h3 style="margin-bottom:6px; font-size:15px;">Coupons (${editable?"editable":"view only"})</h3>
     <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Coupons only discount drink items, one drink per sale (the most expensive eligible drink) — and each code works once. The moment a coupon is used in a completed sale, it's removed automatically.</p>
     <table><thead><tr><th>Code</th><th>Discount</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
@@ -1914,7 +1999,7 @@ function renderCouponsList(el, editable){
       const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
       let added = 0, skipped = 0;
       if(!state.db.coupons) state.db.coupons = [];
-      const existingCodes = new Set(state.db.coupons.map(c=>c.code.toUpperCase()));
+      const existingCodes = new Set(activeCoupons().map(c=>c.code.toUpperCase()));
       lines.forEach(line=>{
         const parts = line.split(",").map(p=>p.trim());
         const code = (parts[0]||"").toUpperCase();
@@ -1930,6 +2015,19 @@ function renderCouponsList(el, editable){
       e.target.value = "";
       render();
     });
+  }
+
+  const usedCoupons = (state.db.coupons||[]).filter(c=>c.deleted)
+    .sort((a,b)=> new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+  if(usedCoupons.length){
+    const usedCard = document.createElement("div");
+    usedCard.className = "card";
+    usedCard.style.marginTop = "16px";
+    usedCard.innerHTML = `<h3 style="margin-bottom:6px; font-size:15px;">Used coupons (${usedCoupons.length})</h3>
+      <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Codes that have already been spent — each is single-use, so these can't be applied again. Kept here as a history, not editable.</p>
+      <table><thead><tr><th>Code</th><th>Discount</th><th>Used</th></tr></thead>
+      <tbody>${usedCoupons.map(c=>`<tr><td class="mono">${c.code}</td><td>${c.percent}% off</td><td class="mono">${new Date(c.updatedAt).toLocaleString()}</td></tr>`).join("")}</tbody></table>`;
+    el.appendChild(usedCard);
   }
 }
 
@@ -1957,7 +2055,7 @@ function openCouponModal(coupon){
     if(!code || isNaN(percent) || percent<=0 || percent>100){ toast("Enter a code and a percent between 1-100","err"); return; }
     if(!state.db.coupons) state.db.coupons = [];
     if(isNew){
-      if(state.db.coupons.some(c=>c.code.toUpperCase()===code)){ toast("That code already exists","err"); return; }
+      if(activeCoupons().some(c=>c.code.toUpperCase()===code)){ toast("That code already exists","err"); return; }
       state.db.coupons.push({ id: uid(), code, percent, active:true, createdAt: nowIso(), updatedAt: nowIso() });
     } else {
       coupon.code = code; coupon.percent = percent;
@@ -1970,7 +2068,7 @@ function openCouponModal(coupon){
   };
   if(!isNew){
     $("#delCoupon").onclick = async ()=>{
-      state.db.coupons = state.db.coupons.filter(c=>c.id!==coupon.id);
+      coupon.deleted = true; coupon.active = false; coupon.updatedAt = nowIso();
       await pushToDrive();
       bg.remove();
       render();
@@ -1980,7 +2078,7 @@ function openCouponModal(coupon){
 
 /* ================= TEAM (developer accounts are never listed here) ================= */
 function renderTeamList(el, editable){
-  const visibleUsers = state.db.users.filter(u=>u.role!=="developer");
+  const visibleUsers = activeUsers().filter(u=>u.role!=="developer");
   el.innerHTML = `<div class="card"><h3 style="margin-bottom:12px; font-size:15px;">Team (${editable?"editable":"view only"})</h3>
     <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
     <tbody id="teamBody"></tbody></table>
@@ -2000,7 +2098,7 @@ function renderTeamList(el, editable){
   if(editable){
     $("#addUserBtn").onclick = ()=>openUserModal(null);
     body.querySelectorAll("a[data-uid]").forEach(a=>{
-      a.onclick = ()=>openUserModal(state.db.users.find(u=>u.id===a.dataset.uid));
+      a.onclick = ()=>openUserModal(activeUsers().find(u=>u.id===a.dataset.uid));
     });
   }
 }
@@ -2037,7 +2135,7 @@ function openUserModal(user){
     const pass = $("#ufPass").value;
     if(!name || !username){ toast("Name and username are required","err"); return; }
     if(isNew){
-      if(state.db.users.some(u=>u.username.toLowerCase()===username.toLowerCase())){
+      if(activeUsers().some(u=>u.username.toLowerCase()===username.toLowerCase())){
         toast("Username already exists","err"); return;
       }
       if(!pass){ toast("Password is required","err"); return; }
@@ -2054,7 +2152,7 @@ function openUserModal(user){
   };
   if(!isNew){
     $("#delUser").onclick = async ()=>{
-      state.db.users = state.db.users.filter(u=>u.id!==user.id);
+      user.deleted = true; user.active = false; user.updatedAt = nowIso();
       await pushToDrive();
       bg.remove();
       render();
@@ -2229,7 +2327,7 @@ function renderDeveloperView(el){
   toggleWrap.innerHTML = `
     <div>
       <b>Main system ${state.db.meta.appActive ? "is active" : "is deactivated"}</b>
-      <div style="font-size:12px; color:var(--crema-dim); margin-top:2px;">Clones on cashier devices sync from Drive and follow this switch.</div>
+      <div style="font-size:12px; color:var(--crema-dim); margin-top:2px;">Clones on cashier devices sync automatically and follow this switch.</div>
     </div>
     <button class="btn ${state.db.meta.appActive ? 'btn-danger':'btn-primary'}" id="toggleActive">${state.db.meta.appActive ? "Deactivate" : "Activate"}</button>
   `;
