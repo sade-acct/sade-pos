@@ -1,4 +1,4 @@
-const CACHE = "sade-pos-v1";
+const CACHE = "sade-pos-v3";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -17,16 +17,18 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
-  // Never cache Google API / Drive calls — those must always hit the network.
-  if (e.request.url.includes("googleapis.com") || e.request.url.includes("accounts.google.com")) return;
+  // Never cache GitHub API calls — the database read/writes must always hit the network.
+  if (e.request.url.includes("api.github.com")) return;
+  // Network-first: always try to fetch the latest version of the file when
+  // online, so an app update takes effect the moment it's uploaded — only
+  // falling back to the cached copy when there's no connection at all. That
+  // fallback is what keeps the PWA usable offline; it should never be the
+  // reason a fix looks like it "didn't apply."
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const fetchPromise = fetch(e.request).then((resp) => {
-        const copy = resp.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
-        return resp;
-      }).catch(() => cached);
-      return cached || fetchPromise;
-    })
+    fetch(e.request).then((resp) => {
+      const copy = resp.clone();
+      caches.open(CACHE).then((c) => c.put(e.request, copy));
+      return resp;
+    }).catch(() => caches.match(e.request))
   );
 });
