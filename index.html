@@ -1164,6 +1164,17 @@ function activeUsers(){
 function activeCoupons(){
   return (state.db.coupons||[]).filter(c=>!c.deleted);
 }
+/* everything worth showing in the Coupons tab: active, disabled, AND used
+   (single-use tombstones) — but not a code the developer truly deleted,
+   which stays fully hidden the way a delete normally would. */
+function visibleCoupons(){
+  return (state.db.coupons||[]).filter(c=>!c.deleted || c.usedInSale);
+}
+function couponStatus(c){
+  if(c.usedInSale) return { label:"Used", color:"var(--crema-dim)" };
+  if(c.active===false) return { label:"Disabled", color:"var(--err)" };
+  return { label:"Active", color:"var(--ok)" };
+}
 function categoryName(catId){
   const c = (state.db.categories||[]).find(c=>c.id===catId && !c.deleted);
   return c ? c.name : "Other";
@@ -1409,10 +1420,13 @@ async function completeSale(){
     date: todayStr()
   };
   state.db.sales.push(sale);
-  // coupons are single-use — discard it the moment it's actually used in a completed sale
+  // coupons are single-use — mark it used the moment it's actually applied
+  // in a completed sale. This is a distinct flag from a manual "Delete" so
+  // the Coupons tab can show "Used" as its own status rather than just
+  // vanishing the same way a developer-deleted code does.
   if(state.appliedCoupon && totals.discountAmt > 0){
     const used = state.db.coupons.find(c => c.code.toUpperCase() === state.appliedCoupon.code.toUpperCase());
-    if(used){ used.deleted = true; used.active = false; used.updatedAt = nowIso(); }
+    if(used){ used.deleted = true; used.active = false; used.usedInSale = true; used.updatedAt = nowIso(); }
   }
   state.cart = [];
   state.appliedCoupon = null;
@@ -1961,9 +1975,9 @@ function openCategoryModal(cat){
 
 /* ================= COUPONS ================= */
 function renderCouponsList(el, editable){
-  const coupons = activeCoupons().slice().sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0));
+  const coupons = visibleCoupons().slice().sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0));
   el.innerHTML = `<div class="card"><h3 style="margin-bottom:6px; font-size:15px;">Coupons (${editable?"editable":"view only"})</h3>
-    <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Coupons only discount drink items, one drink per sale (the most expensive eligible drink) — and each code works once. The moment a coupon is used in a completed sale, it's removed automatically.</p>
+    <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Coupons only discount drink items, one drink per sale (the most expensive eligible drink) — and each code works once. The moment a coupon is used in a completed sale, its status changes to "Used" and it can never be applied again.</p>
     <table><thead><tr><th>Code</th><th>Discount</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
     <tbody id="couponBody"></tbody></table>
     ${editable?`
@@ -1980,10 +1994,11 @@ function renderCouponsList(el, editable){
     body.innerHTML = `<tr><td colspan="${editable?4:3}" style="text-align:center; color:var(--crema-dim); padding:24px;">No coupons yet.</td></tr>`;
   }
   coupons.forEach(c=>{
+    const status = couponStatus(c);
     const tr = document.createElement("tr");
     tr.innerHTML = `<td class="mono">${c.code}</td><td>${c.percent}% off</td>
-      <td style="color:${c.active===false?'var(--err)':'var(--ok)'};">${c.active===false?"Disabled":"Active"}</td>
-      ${editable?`<td><a class="link" data-cid="${c.id}">Edit</a></td>`:""}`;
+      <td style="color:${status.color};">${status.label}</td>
+      ${editable?`<td>${c.usedInSale ? "" : `<a class="link" data-cid="${c.id}">Edit</a>`}</td>`:""}`;
     body.appendChild(tr);
   });
   if(editable){
@@ -2015,19 +2030,6 @@ function renderCouponsList(el, editable){
       e.target.value = "";
       render();
     });
-  }
-
-  const usedCoupons = (state.db.coupons||[]).filter(c=>c.deleted)
-    .sort((a,b)=> new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
-  if(usedCoupons.length){
-    const usedCard = document.createElement("div");
-    usedCard.className = "card";
-    usedCard.style.marginTop = "16px";
-    usedCard.innerHTML = `<h3 style="margin-bottom:6px; font-size:15px;">Used coupons (${usedCoupons.length})</h3>
-      <p style="font-size:12px; color:var(--crema-dim); margin-bottom:12px;">Codes that have already been spent — each is single-use, so these can't be applied again. Kept here as a history, not editable.</p>
-      <table><thead><tr><th>Code</th><th>Discount</th><th>Used</th></tr></thead>
-      <tbody>${usedCoupons.map(c=>`<tr><td class="mono">${c.code}</td><td>${c.percent}% off</td><td class="mono">${new Date(c.updatedAt).toLocaleString()}</td></tr>`).join("")}</tbody></table>`;
-    el.appendChild(usedCard);
   }
 }
 
