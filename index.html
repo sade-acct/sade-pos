@@ -305,6 +305,7 @@
   /* ---------- print ---------- */
   #printArea{display:none;}
   @media print{
+    @page{ margin:6mm; }
     body *{visibility:hidden;}
     #printArea, #printArea *{visibility:visible;}
     #printArea{
@@ -438,6 +439,8 @@ function defaultDb(){
       currencySymbol: "$", currencyCode: "USD", freeLayout: false,
       layout: { numpadWidth: 300, cartWidth: 340, canvasHeight: 560, gridCols: 6, gridRows: 4 },
       roleLabels: { admin: "Admin", cashier: "Cashier" },
+      adminTabs: { live:true, reports:true, menu:true, categories:true, coupons:true, team:true },
+      printCopies: 1,
       receiptHeader: "", receiptFooter: "Thank you!", autoPrintReceipt: true,
       theme: {...DEFAULT_THEME}, updatedAt: nowIso()
     },
@@ -474,6 +477,11 @@ function migrateDb(db){
   if(!db.meta.roleLabels) db.meta.roleLabels = { admin: "Admin", cashier: "Cashier" };
   if(!db.meta.roleLabels.admin) db.meta.roleLabels.admin = "Admin";
   if(!db.meta.roleLabels.cashier) db.meta.roleLabels.cashier = "Cashier";
+  if(!db.meta.adminTabs) db.meta.adminTabs = { live:true, reports:true, menu:true, categories:true, coupons:true, team:true };
+  ["live","reports","menu","categories","coupons","team"].forEach(k=>{
+    if(db.meta.adminTabs[k]===undefined) db.meta.adminTabs[k] = true;
+  });
+  if(db.meta.printCopies===undefined) db.meta.printCopies = 1;
   if(db.meta.receiptHeader===undefined) db.meta.receiptHeader = "";
   if(!db.meta.receiptFooter) db.meta.receiptFooter = "Thank you!";
   if(db.meta.autoPrintReceipt===undefined) db.meta.autoPrintReceipt = true;
@@ -607,15 +615,21 @@ function roleLabel(key){
   return (labels && labels[key]) || (key.charAt(0).toUpperCase()+key.slice(1));
 }
 
-/* print any HTML fragment using a hidden print-only container */
-function printHTML(innerHtml){
+/* print any HTML fragment using a hidden print-only container.
+   `copies` repeats the fragment in the SAME print job (one dialog, N copies
+   separated by page breaks) rather than calling window.print() repeatedly,
+   which would stack multiple dialogs. Only sale receipts pass a copies
+   count; printed reports stay at a single copy. */
+function printHTML(innerHtml, copies){
+  copies = Math.max(1, copies || 1);
   let area = document.getElementById("printArea");
   if(!area){
     area = document.createElement("div");
     area.id = "printArea";
     document.body.appendChild(area);
   }
-  area.innerHTML = innerHtml;
+  area.innerHTML = Array.from({length:copies}, ()=>innerHtml)
+    .join('<div style="page-break-after:always; height:0;"></div>');
   window.print();
 }
 
@@ -1402,11 +1416,24 @@ function renderNumpadPanel(host){
   };
 }
 
+/* Shop-wide daily receipt number: counts every sale already recorded today
+   by ANY cashier and adds one, zero-padded to 3 digits. It's derived from
+   the sales themselves rather than kept as a separate counter, so it resets
+   on its own when the date changes, is unaffected by a cashier closing
+   their day or by who's signed in, and needs no extra state to sync. (If two
+   devices finish a sale inside the same ~20s sync window they could compute
+   the same number — a small, accepted trade-off at one shop's volume.) */
+function nextReceiptNumber(){
+  const todayCount = state.db.sales.filter(s=>s.date===todayStr()).length;
+  return String(todayCount + 1).padStart(3, "0");
+}
+
 async function completeSale(){
   if(state.cart.length===0) return;
   const totals = computeCartTotals(state.cart, state.appliedCoupon);
   const sale = {
     id: uid(),
+    receiptNumber: nextReceiptNumber(),
     cashierId: state.currentUser.id,
     cashierName: state.currentUser.name || state.currentUser.username,
     items: state.cart.map(i=>({productId:i.productId, name:i.name, price:i.price, qty:i.qty, isDrink:i.isDrink!==false})),
@@ -1431,11 +1458,16 @@ async function completeSale(){
   state.cart = [];
   state.appliedCoupon = null;
   await pushToDrive();
-  showReceiptModal(sale);
-  if(state.db.meta.autoPrintReceipt !== false){
-    printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`);
-  }
   render();
+  if(state.db.meta.autoPrintReceipt !== false){
+    // auto-print on: the print dialog is the only thing that opens — no
+    // second on-screen "Sale complete" popup on top of it.
+    toast(`Sale complete — receipt ${sale.receiptNumber}`, "ok");
+    printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`, state.db.meta.printCopies);
+  } else {
+    // auto-print off: show the receipt on screen so it can still be printed by hand
+    showReceiptModal(sale);
+  }
 }
 
 function showReceiptModal(sale){
@@ -1447,16 +1479,17 @@ function showReceiptModal(sale){
       <div class="receipt" id="receiptContent">${receiptInnerHtml(sale)}</div>
       <div class="modal-actions">
         <button class="btn btn-outline btn-block" id="closeReceipt">Close</button>
-        <button class="btn btn-primary btn-block" id="printReceiptBtn">🖨️ Print again</button>
+        <button class="btn btn-primary btn-block" id="printReceiptBtn">🖨️ Print</button>
       </div>
     </div>`;
   document.body.appendChild(bg);
   $("#closeReceipt").onclick = ()=>bg.remove();
-  $("#printReceiptBtn").onclick = ()=> printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`);
+  $("#printReceiptBtn").onclick = ()=> printHTML(`<div class="receipt">${receiptInnerHtml(sale)}</div>`, state.db.meta.printCopies);
 }
 
 function receiptInnerHtml(sale){
   const rows = `
+    ${sale.receiptNumber ? `<div class="rline" style="font-weight:700;"><span>Receipt No.</span><span>${sale.receiptNumber}</span></div>` : ""}
     <div class="rline"><span>${new Date(sale.timestamp).toLocaleString()}</span><span>${sale.cashierName}</span></div>
     <hr/>
     ${sale.items.map(i=>`<div class="rline"><span>${i.qty}× ${i.name}</span><span>${money(i.price*i.qty)}</span></div>`).join("")}
@@ -1531,9 +1564,18 @@ function openCloseDayModal(){
 
 /* ================= ADMIN VIEW (read-only) ================= */
 function renderAdminView(el){
+  const at = state.db.meta.adminTabs || {};
+  const allTabs = [["live","Live sales"],["reports","Day reports"],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]];
+  const visibleTabs = allTabs.filter(([key])=> at[key]!==false);
+  if(visibleTabs.length===0){
+    el.innerHTML = `<div class="empty-state"><div class="big">🙈</div><p>The developer hasn't made any dashboard sections visible yet.</p></div>`;
+    return;
+  }
+  if(!visibleTabs.some(([key])=>key===state.adminTab)) state.adminTab = visibleTabs[0][0];
+
   const tabs = document.createElement("div");
   tabs.className = "tabs";
-  [["live","Live sales"],["reports","Day reports"],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]].forEach(([key,label])=>{
+  visibleTabs.forEach(([key,label])=>{
     const t = document.createElement("div");
     t.className = "tab" + (state.adminTab===key ? " active":"");
     t.textContent = label;
@@ -1998,13 +2040,29 @@ function renderCouponsList(el, editable){
     const tr = document.createElement("tr");
     tr.innerHTML = `<td class="mono">${c.code}</td><td>${c.percent}% off</td>
       <td style="color:${status.color};">${status.label}</td>
-      ${editable?`<td>${c.usedInSale ? "" : `<a class="link" data-cid="${c.id}">Edit</a>`}</td>`:""}`;
+      ${editable?`<td>${c.usedInSale
+        ? `<a class="link" data-used-delete="${c.id}" style="color:var(--err);">Delete</a>`
+        : `<a class="link" data-cid="${c.id}">Edit</a>`}</td>`:""}`;
     body.appendChild(tr);
   });
   if(editable){
     $("#addCouponBtn").onclick = ()=>openCouponModal(null);
     body.querySelectorAll("a[data-cid]").forEach(a=>{
       a.onclick = ()=>openCouponModal(coupons.find(c=>c.id===a.dataset.cid));
+    });
+    body.querySelectorAll("a[data-used-delete]").forEach(a=>{
+      a.onclick = async ()=>{
+        const c = coupons.find(x=>x.id===a.dataset.usedDelete);
+        if(!c) return;
+        if(!confirm(`Remove the used code ${c.code} from this list? It's already spent and can't be reused either way — this just clears it from view.`)) return;
+        // stays a tombstone (deleted stays true, so it can never be re-applied);
+        // clearing usedInSale is what drops it out of the visible list.
+        c.usedInSale = false;
+        c.updatedAt = nowIso();
+        await pushToDrive();
+        toast("Removed from list", "ok");
+        render();
+      };
     });
     $("#uploadCsvBtn").onclick = ()=> $("#csvFileInput").click();
     $("#csvFileInput").addEventListener("change", async e=>{
@@ -2227,8 +2285,31 @@ function renderSettingsPanel(el){
         </div>
       </div>
 
+      <div class="settings-section">
+        <h4>Admin dashboard tabs</h4>
+        <p style="font-size:12px; color:var(--crema-dim); margin-bottom:10px;">Choose which sections the admin role can see. Unchecked ones are completely hidden — not just view-only, but absent.</p>
+        <div id="adminTabsChecklist"></div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Printing</h4>
+        <div class="field"><label>Copies per receipt</label><input type="number" id="stPrintCopies" min="1" max="5" value="${m.printCopies||1}" style="max-width:120px;" /></div>
+        <p style="font-size:12px; color:var(--crema-dim);">How many copies print automatically each time a sale completes.</p>
+      </div>
+
       <button class="btn btn-primary btn-block" id="saveSettingsBtn">Save settings</button>
     </div>`;
+
+  const adminTabLabels = { live:"Live sales", reports:"Day reports", menu:"Menu", categories:"Categories", coupons:"Coupons", team:"Team" };
+  const adminTabsDraft = { ...(m.adminTabs||{}) };
+  const checklist = $("#adminTabsChecklist");
+  Object.keys(adminTabLabels).forEach(key=>{
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:8px;";
+    row.innerHTML = `<input type="checkbox" id="atc_${key}" style="width:auto;" ${adminTabsDraft[key]!==false?"checked":""}/> ${adminTabLabels[key]}`;
+    row.querySelector("input").addEventListener("change", e=>{ adminTabsDraft[key] = e.target.checked; });
+    checklist.appendChild(row);
+  });
 
   const fieldLabels = { bg:"Background", bg2:"Panels / cards", accent:"Accent (buttons)", accentLight:"Accent — hover", text:"Text color" };
   const grid = $("#themeGrid");
@@ -2309,6 +2390,8 @@ function renderSettingsPanel(el){
       cashier: $("#stCashierLabel").value.trim() || "Cashier",
       admin: $("#stAdminLabel").value.trim() || "Admin"
     };
+    draft.adminTabs = adminTabsDraft;
+    draft.printCopies = Math.max(1, Math.min(5, parseInt($("#stPrintCopies").value,10) || 1));
     state.db.meta = { ...state.db.meta, ...draft };
     applyTheme();
     await pushToDrive();
