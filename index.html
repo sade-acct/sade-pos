@@ -103,6 +103,31 @@
   .dot{width:7px; height:7px; border-radius:50%; background:var(--crema-dim);}
   .dot.live{background:var(--ok); box-shadow:0 0 0 0 rgba(122,154,108,.6); animation:pulse 2s infinite;}
   .dot.offline{background:var(--err);}
+  .dot.warn{background:#f5a623;}
+  .product-btn.soldout{opacity:.5; position:relative;}
+  .soldout-tag{position:absolute; top:6px; right:6px; background:var(--err); color:#fff; font-size:9.5px; font-weight:700; padding:2px 6px; border-radius:10px;}
+  .inv-row{display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 0; border-bottom:1px solid var(--line);}
+  .inv-main{display:flex; align-items:center; gap:10px; min-width:200px; flex:1;}
+  .inv-dot{width:11px; height:11px; border-radius:50%; flex:none; background:var(--ok);}
+  .inv-dot.low{background:#f5a623;}
+  .inv-dot.out{background:var(--err);}
+  .inv-qty{font-weight:700; font-size:15px; margin-left:auto; padding-left:12px; white-space:nowrap;}
+  .inv-sub{font-size:11.5px; color:var(--crema-dim);}
+  .inv-actions{display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
+  .inv-actions .btn{padding:6px 10px; font-size:12.5px;}
+  .sup-limited .free-toggle-row, .sup-limited .settings-section{display:none;}
+  .an-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:16px;}
+  .an-stat{border:1px solid var(--line); border-radius:8px; padding:12px;}
+  .an-stat b{display:block; font-size:20px; margin-bottom:2px;}
+  .an-stat span{font-size:11.5px; color:var(--crema-dim);}
+  .an-bar{height:8px; border-radius:4px; background:var(--copper); min-width:2px;}
+  .an-hours{display:flex; align-items:flex-end; gap:4px; height:130px; margin:10px 0 4px;}
+  .an-hours .col{flex:1; display:flex; flex-direction:column; justify-content:flex-end; height:100%;}
+  .an-hours .col div{width:100%; background:var(--copper); border-radius:3px 3px 0 0; min-height:2px;}
+  .an-hlabels{display:flex; gap:4px; font-size:10px; color:var(--crema-dim);}
+  .an-hlabels span{flex:1; text-align:center;}
+  .an-sec{margin-bottom:22px;}
+  .an-sec h4{font-size:13px; margin-bottom:8px;}
   @keyframes pulse{
     0%{box-shadow:0 0 0 0 rgba(122,154,108,.55);}
     70%{box-shadow:0 0 0 6px rgba(122,154,108,0);}
@@ -232,6 +257,20 @@
   }
   .receipt .rline{display:flex; justify-content:space-between;}
   .receipt hr{border:none; border-top:1px dashed #231a12; opacity:.35; margin:8px 0;}
+  .receipt .rsub{padding-left:14px; font-size:11.5px; opacity:.85; line-height:1.4;}
+  .receipt .rnum{align-items:baseline;}
+  .receipt .rnum .num{font-size:1.5em; line-height:1.2;}
+  .ci-opts{font-size:11px; color:var(--crema-dim); margin-top:2px; line-height:1.35;}
+  .opt-group{margin-bottom:16px;}
+  .opt-group h4{font-size:13px; margin-bottom:8px;}
+  .opt-group h4 small{font-weight:400; color:var(--crema-dim); margin-left:6px;}
+  .opt-choice{display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; cursor:pointer; font-size:14px;}
+  .opt-choice input{width:auto !important; margin:0;}
+  .opt-choice .opt-extra{margin-left:auto; color:var(--crema-dim); font-size:12px;}
+  .opt-choice:has(input:checked){border-color:var(--copper);}
+  .og-box{border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:10px;}
+  .og-row{display:flex; gap:8px; margin-bottom:6px;}
+  .og-row input{min-width:0;}
 
   .empty-state{padding:50px 20px; text-align:center; color:var(--crema-dim);}
   .empty-state .big{font-size:38px; margin-bottom:10px;}
@@ -391,6 +430,10 @@ const state = {
   dragProductId: null,
   dragCategoryId: null,
   numpadAmount: "",
+  staffMember: null,   // {id, name} while a staff order is active
+  supTab: "menu",
+  anRange: null,
+  lastSyncAt: null,
   numpadTarget: null   // null (locked), {kind:"product", id, name, isDrink}, or {kind:"coupon"}
 };
 
@@ -399,6 +442,20 @@ const app = () => document.getElementById("app");
 const uid = () => crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
 const todayStr = () => new Date().toISOString().slice(0,10);
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function pad2(n){ return String(n).padStart(2,"0"); }
+/* dd/mm/yyyy — accepts an ISO timestamp, a Date, or a "yyyy-mm-dd" string */
+function fmtDate(v){
+  if(typeof v==="string" && /^\d{4}-\d{2}-\d{2}$/.test(v)){ const p=v.split("-"); return p[2]+"/"+p[1]+"/"+p[0]; }
+  const d = new Date(v);
+  if(isNaN(d)) return "";
+  return pad2(d.getDate())+"/"+pad2(d.getMonth()+1)+"/"+d.getFullYear();
+}
+function fmtDateTime(v){
+  const d = new Date(v);
+  if(isNaN(d)) return "";
+  return fmtDate(d)+" "+pad2(d.getHours())+":"+pad2(d.getMinutes());
+}
 function money(n){
   const amt = (Math.round((n||0)*100)/100).toFixed(2);
   const code = state.db && state.db.meta ? state.db.meta.currencyCode : "USD";
@@ -439,8 +496,10 @@ function defaultDb(){
       currencySymbol: "$", currencyCode: "USD", freeLayout: false,
       layout: { numpadWidth: 300, cartWidth: 340, canvasHeight: 560, gridCols: 6, gridRows: 4 },
       roleLabels: { admin: "Admin", cashier: "Cashier" },
-      adminTabs: { live:true, reports:true, menu:true, categories:true, coupons:true, team:true },
+      adminTabs: { live:true, reports:true, menu:true, categories:true, coupons:true, team:true, analytics:false },
       printCopies: 1,
+      staffEnabled: false, staffPinRequired: false, staffDiscountPercent: 100,
+      inventoryEnabled: false, inventoryAdmin: true, inventoryCashier: "log",
       receiptHeader: "", receiptFooter: "Thank you!", autoPrintReceipt: true,
       theme: {...DEFAULT_THEME}, updatedAt: nowIso()
     },
@@ -458,12 +517,43 @@ function defaultDb(){
       { id: uid(), name:"Muffin", price:3.25, categoryId:catBakery, emoji:"🧁", color:"#a8763e", isDrink:false, active:true, order:5, updatedAt: nowIso() },
     ],
     coupons: [],
+    staff: [],
+    staffUsage: [],
+    invItems: [],
+    invMoves: [],
     sales: [],
     dayCloses: []
   };
 }
 
 /* bring an older/incomplete db up to the current shape — always safe to re-run */
+/* Day-close reports: when two reports are identical in everything but the closing time
+   (same date, cashier, transaction count, cash, card, coupons and total), only the latest
+   is kept and the earlier one(s) are removed. Runs on every load/merge, so a removed copy
+   can't come back from another device. */
+function dedupeDayCloses(list){
+  const best = new Map();
+  (list||[]).forEach(c=>{
+    const b = c.breakdown || {};
+    const key = [
+      c.date, c.cashierId || c.cashierName, c.transactionCount,
+      Math.round((+b.cash||0)*100), Math.round((+b.card||0)*100), Math.round((+c.totalSales||0)*100),
+      (b.couponsUsed||[]).length, Math.round((+b.couponsDiscountTotal||0)*100)
+    ].join("|");
+    const cur = best.get(key);
+    const t = new Date(c.closedAt || 0).getTime() || 0;
+    const ct = cur ? (new Date(cur.closedAt || 0).getTime() || 0) : -1;
+    if(!cur || t > ct || (t === ct && String(c.id) > String(cur.id))) best.set(key, c);
+  });
+  const keep = new Set([...best.values()].map(c=>c.id));
+  return (list||[]).filter(c=>keep.has(c.id));
+}
+
+/* A device only claims "my settings are the newest" when its settings really changed.
+   (Before, every sale bumped the settings timestamp, so a cashier device could overwrite a
+   switch the developer had just changed — e.g. the Staff on/off switch.) */
+function metaFp(m){ const c = { ...m }; delete c.updatedAt; delete c._fp; return JSON.stringify(c); }
+
 function migrateDb(db){
   db.meta = db.meta || {};
   if(db.meta.appActive===undefined) db.meta.appActive = true;
@@ -481,6 +571,7 @@ function migrateDb(db){
   ["live","reports","menu","categories","coupons","team"].forEach(k=>{
     if(db.meta.adminTabs[k]===undefined) db.meta.adminTabs[k] = true;
   });
+  if(db.meta.adminTabs.analytics===undefined) db.meta.adminTabs.analytics = false;   // sales reports: off for admins until the developer turns them on
   if(db.meta.printCopies===undefined) db.meta.printCopies = 1;
   if(db.meta.receiptHeader===undefined) db.meta.receiptHeader = "";
   if(!db.meta.receiptFooter) db.meta.receiptFooter = "Thank you!";
@@ -488,12 +579,22 @@ function migrateDb(db){
   if(db.meta.logoDataUrl===undefined) db.meta.logoDataUrl = null;
   if(!db.meta.theme) db.meta.theme = {...DEFAULT_THEME};
   if(!db.meta.updatedAt) db.meta.updatedAt = nowIso();
+  if(db.meta.staffEnabled===undefined) db.meta.staffEnabled = false;
+  if(db.meta.staffPinRequired===undefined) db.meta.staffPinRequired = false;
+  if(db.meta.staffDiscountPercent===undefined) db.meta.staffDiscountPercent = 100;
+  if(db.meta.inventoryEnabled===undefined) db.meta.inventoryEnabled = false;
+  if(db.meta.inventoryAdmin===undefined) db.meta.inventoryAdmin = true;
+  if(!db.meta.inventoryCashier) db.meta.inventoryCashier = "log";
 
+  db.staff = db.staff || [];
+  db.staffUsage = db.staffUsage || [];
+  db.invItems = db.invItems || [];
+  db.invMoves = db.invMoves || [];
   db.users = db.users || [];
   db.products = db.products || [];
   db.coupons = db.coupons || [];
   db.sales = db.sales || [];
-  db.dayCloses = db.dayCloses || [];
+  db.dayCloses = dedupeDayCloses(db.dayCloses || []);
 
   if(!db.categories || db.categories.length===0){
     db.categories = [
@@ -521,6 +622,7 @@ function migrateDb(db){
     if(s.discountAmt===undefined) s.discountAmt = 0;
     if(s.discountPercent===undefined) s.discountPercent = 0;
   });
+  db.meta._fp = metaFp(db.meta);
   return db;
 }
 
@@ -677,11 +779,22 @@ function base64ToUtf8(str){ return decodeURIComponent(escape(atob(str.replace(/\
 
 /* "Connecting" now just means validating the pasted token works, rather
    than an OAuth popup flow. */
+/* Checks the token and the data repository, and throws an error whose message says exactly what is wrong. */
 async function connectDrive(){
   if(!state.accessToken) throw new Error("No access token set");
-  const res = await fetch(ghApiUrl(), { headers: authHeaders() });
-  if(res.status === 401 || res.status === 403) throw new Error("Invalid or expired token");
-  // 404 is fine here — it just means the database file doesn't exist yet.
+  const repoName = CONFIG.GITHUB_OWNER + "/" + CONFIG.GITHUB_REPO;
+  let res;
+  try{
+    res = await fetch(`https://api.github.com/repos/${CONFIG.GITHUB_OWNER}/${CONFIG.GITHUB_REPO}`, { headers: authHeaders() });
+  }catch(e){ throw new Error("No internet connection"); }
+  if(res.status === 401) throw new Error("The token is invalid or expired — create a new one and paste it again");
+  if(res.status === 404) throw new Error(`Repository ${repoName} was not found, or this token can't see it. Check the name, and create the token on the ${CONFIG.GITHUB_OWNER} account with this repository selected`);
+  if(res.status === 403) throw new Error("GitHub refused the token (403) — check its permissions or wait a minute if you tried many times");
+  if(!res.ok) throw new Error("GitHub error " + res.status);
+  const info = await res.json();
+  if(info.private === false) throw new Error(`${repoName} is PUBLIC — set it to Private in the repository settings first, so your sales data stays hidden`);
+  if(info.permissions && info.permissions.push === false) throw new Error("This token is read-only — set Contents to Read and write");
+  // a missing database file (404) is fine here — it is created next.
 }
 
 async function driveFindDbFile(){
@@ -702,7 +815,8 @@ async function driveCreateDbFile(dbObj){
       content: utf8ToBase64(JSON.stringify(dbObj, null, 2))
     })
   });
-  if(!res.ok) throw new Error("GitHub create failed: "+res.status);
+  if(res.status === 403 || res.status === 404) throw new Error(`GitHub won't let this token create the database file (${res.status}). On the token, set Contents to Read and write for ${CONFIG.GITHUB_REPO}`);
+  if(!res.ok) throw new Error("Couldn't create the database file (GitHub " + res.status + ")");
   const data = await res.json();
   state.fileSha = data.content.sha;
   return CONFIG.DB_FILENAME;
@@ -755,7 +869,7 @@ async function driveWriteFile(fileId, dbObj){
 function mergeDb(local, remote){
   if(!remote) return local;
   if(!local) return remote;
-  const merged = { meta: null, users: [], products: [], categories: [], coupons: [], sales: [], dayCloses: [] };
+  const merged = { meta: null, users: [], products: [], categories: [], coupons: [], staff: [], staffUsage: [], invItems: [], invMoves: [], sales: [], dayCloses: [] };
   merged.meta = (new Date(remote.meta.updatedAt) > new Date(local.meta.updatedAt)) ? remote.meta : local.meta;
 
   function mergeById(a, b){
@@ -772,6 +886,8 @@ function mergeDb(local, remote){
   merged.products = mergeById(local.products, remote.products);
   merged.categories = mergeById(local.categories, remote.categories);
   merged.coupons = mergeById(local.coupons, remote.coupons);
+  merged.staff = mergeById(local.staff, remote.staff);
+  merged.invItems = mergeById(local.invItems, remote.invItems);
 
   function unionById(a,b){
     const map = {};
@@ -780,6 +896,8 @@ function mergeDb(local, remote){
   }
   merged.sales = unionById(local.sales, remote.sales);
   merged.dayCloses = unionById(local.dayCloses, remote.dayCloses);
+  merged.staffUsage = unionById(local.staffUsage, remote.staffUsage);
+  merged.invMoves = unionById(local.invMoves, remote.invMoves);
   return merged;
 }
 
@@ -788,8 +906,10 @@ async function pullFromDrive(silent){
   try{
     const remote = await driveReadFile(state.dbFileId);
     state.db = migrateDb(mergeDb(state.db, remote));
+    state.lastSyncAt = nowIso();
     applyTheme();
     saveLocalCache();
+    autoBackup();
     if(!silent) render();
     else renderIfLive();
   }catch(e){ console.warn("pull failed", e); }
@@ -797,7 +917,9 @@ async function pullFromDrive(silent){
 
 let pendingSave = null;
 async function pushToDrive(){
-  state.db.meta.updatedAt = nowIso();
+  const fp = metaFp(state.db.meta);
+  if(state.db.meta._fp === undefined){ state.db.meta._fp = fp; }
+  else if(state.db.meta._fp !== fp){ state.db.meta._fp = fp; state.db.meta.updatedAt = nowIso(); }
   saveLocalCache();
   clearTimeout(pendingSave);
   pendingSave = setTimeout(async ()=>{
@@ -810,6 +932,7 @@ async function pushToDrive(){
       state.saving = true;
       await driveWriteFile(state.dbFileId, state.db);
       state.offlinePending = false;
+      state.lastSyncAt = nowIso();
     }catch(e){
       console.warn("save failed", e);
       state.offlinePending = true;
@@ -833,6 +956,7 @@ async function flushOffline(){
     state.db = migrateDb(mergeDb(state.db, remote));
     await driveWriteFile(state.dbFileId, state.db);
     state.offlinePending = false;
+    state.lastSyncAt = nowIso();
     saveLocalCache();
     applyTheme();
     startSyncLoop();
@@ -860,7 +984,7 @@ function startSyncLoop(){
 
 /* re-render only if we're on a "live" screen, to avoid clobbering form input focus */
 function renderIfLive(){
-  if(["admin","developer"].includes(state.view)) render();
+  if(["admin","developer","supervisor"].includes(state.view)) render();
   else if(state.view==="cashier"){
     // just refresh the sync pill without rebuilding the whole cart/typing state
     const pill = document.getElementById("syncPill");
@@ -869,10 +993,14 @@ function renderIfLive(){
 }
 function syncPillHtml(){
   if(!state.accessToken){
-    return `<span class="pill" id="syncPill" style="cursor:pointer; border-color:var(--copper);"><span class="dot offline"></span>Tap to connect</span>`;
+    return `<span class="pill" id="syncPill" style="cursor:pointer; border-color:var(--copper);" title="This device is not connected"><span class="dot offline"></span>Tap to connect</span>`;
   }
-  const offline = state.offlinePending || !navigator.onLine;
-  return `<span class="pill" id="syncPill"${offline?' style="cursor:pointer;"':''}><span class="dot ${offline?'offline':'live'}"></span>${offline ? "Offline — tap to retry" : (state.saving ? "Syncing…" : "Live")}</span>`;
+  let cls, label, tip = "";
+  if(!navigator.onLine){ cls = "offline"; label = "Offline — saved on this device"; }
+  else if(state.offlinePending){ cls = "warn"; label = "Waiting to sync — tap to retry"; }
+  else if(state.saving){ cls = "warn"; label = "Syncing…"; }
+  else { cls = "live"; label = "Synced"; tip = state.lastSyncAt ? "Last sync " + fmtDateTime(state.lastSyncAt).slice(11) : ""; }
+  return `<span class="pill" id="syncPill" style="cursor:pointer;" title="${tip}"><span class="dot ${cls}"></span>${label}</span>`;
 }
 function wireSyncPill(){
   const pill = document.getElementById("syncPill");
@@ -881,6 +1009,8 @@ function wireSyncPill(){
     pill.onclick = ()=>{ state.view = "connect"; render(); };
   } else if(state.offlinePending){
     pill.onclick = ()=> flushOffline();
+  } else {
+    pill.onclick = async ()=>{ await pullFromDrive(true); toast("Checked — everything is up to date", "ok"); };
   }
 }
 
@@ -890,6 +1020,74 @@ window.addEventListener("offline", ()=>{
   toast("You're offline — sales keep working and will sync automatically", "err");
   renderIfLive();
 });
+
+/* ================= AUTO BACKUP =================
+   A dated copy of the whole database is saved in the "backups" folder of the data repository:
+   at most every 4 hours while the app is in use, and every time a day is closed.
+   The last 30 days of backups are kept. To restore, copy a backup file over the database file on GitHub. */
+const BACKUP_EVERY_MS = 4*60*60*1000, BACKUP_KEEP_DAYS = 30;
+function backupUrl(path){ return `https://api.github.com/repos/${CONFIG.GITHUB_OWNER}/${CONFIG.GITHUB_REPO}/contents/${path}`; }
+function backupKey(){ return "sade_last_backup_" + CONFIG.DB_FILENAME; }
+function lastBackupAt(){ try{ return localStorage.getItem(backupKey()) || ""; }catch(e){ return ""; } }
+let backupBusy = false;
+async function autoBackup(force){
+  if(backupBusy || !state.accessToken || !navigator.onLine || !state.db || !state.dbFileId) return false;
+  const last = lastBackupAt();
+  if(!force && last && Date.now() - new Date(last).getTime() < BACKUP_EVERY_MS) return false;
+  backupBusy = true;
+  try{
+    const day = todayStr();
+    const path = "backups/backup-" + day + ".json";
+    let sha;
+    const head = await fetch(backupUrl(path), { headers: authHeaders() });
+    if(head.ok){ sha = (await head.json()).sha; }
+    else if(head.status !== 404) throw new Error("backup check " + head.status);
+    const body = { message: "Auto backup " + day, content: utf8ToBase64(JSON.stringify(state.db)) };
+    if(sha) body.sha = sha;
+    const put = await fetch(backupUrl(path), { method:"PUT", headers:{ ...authHeaders(), "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    if(!put.ok) throw new Error("backup write " + put.status);
+    try{ localStorage.setItem(backupKey(), nowIso()); }catch(e){}
+    if(!sha) pruneBackups();    // first backup of a new day: remove ones older than 30 days
+    return true;
+  }catch(e){
+    console.warn("backup failed", e);
+    return false;
+  }finally{ backupBusy = false; }
+}
+async function pruneBackups(){
+  try{
+    const res = await fetch(backupUrl("backups"), { headers: authHeaders() });
+    if(!res.ok) return;
+    const files = await res.json();
+    const cutoff = new Date(Date.now() - BACKUP_KEEP_DAYS*86400000).toISOString().slice(0,10);
+    const old = files.filter(f=>/^backup-\d{4}-\d{2}-\d{2}\.json$/.test(f.name) && f.name.slice(7,17) < cutoff).slice(0,5);
+    for(const f of old){
+      await fetch(backupUrl("backups/" + f.name), { method:"DELETE", headers:{ ...authHeaders(), "Content-Type":"application/json" }, body: JSON.stringify({ message:"Remove old backup", sha:f.sha }) });
+    }
+  }catch(e){}
+}
+function appendBackupCard(el){
+  const card = document.createElement("div");
+  card.className = "card";
+  card.style.marginTop = "16px";
+  const last = lastBackupAt();
+  card.innerHTML = `
+    <h3 style="font-size:15px; margin-bottom:8px;">Backups</h3>
+    <p style="font-size:12.5px; color:var(--crema-dim); margin-bottom:10px;">A copy of all your data is saved automatically in the <b>backups</b> folder of the data repository (about every 4 hours while the app is in use, and whenever a day is closed). The last 30 days are kept.</p>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <button class="btn btn-outline" id="backupNowBtn">💾 Back up now</button>
+      <span id="backupLast" style="font-size:12.5px; color:var(--crema-dim);">${last ? "Last backup from this device: " + fmtDateTime(last) : "No backup made from this device yet."}</span>
+    </div>`;
+  el.appendChild(card);
+  card.querySelector("#backupNowBtn").onclick = async ()=>{
+    const btn = card.querySelector("#backupNowBtn");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const ok = await autoBackup(true);
+    btn.disabled = false; btn.textContent = "💾 Back up now";
+    if(ok){ toast("Backup saved", "ok"); card.querySelector("#backupLast").textContent = "Last backup from this device: " + fmtDateTime(lastBackupAt()); }
+    else toast("Backup failed — check the connection and the token's permissions", "err");
+  };
+}
 
 /* ================= AUTH (in-app roles) ================= */
 
@@ -982,11 +1180,13 @@ async function handleConnect(){
     applyTheme();
     saveLocalCache();
     startSyncLoop();
+    state.lastSyncAt = nowIso();
+    autoBackup();
     state.view = "login";
     render();
   }catch(e){
     console.error(e);
-    toast("Could not connect. Check your token, repository name, and permissions.", "err");
+    toast("Could not connect — " + ((e && e.message) || "check your token, repository name, and permissions") + ".", "err");
   }
 }
 
@@ -1001,6 +1201,7 @@ function render(){
   if(state.view === "cashier") return renderShell(el, renderCashierView);
   if(state.view === "admin") return renderShell(el, renderAdminView);
   if(state.view === "developer") return renderShell(el, renderDeveloperView);
+  if(state.view === "supervisor") return renderShell(el, renderSupervisorView);
 }
 
 /* ---------------- SETUP (no client id configured) ---------------- */
@@ -1112,7 +1313,7 @@ function renderShell(el, contentFn){
         ${syncPillHtml()}
       </div>
       <div class="actions">
-        ${state.currentUser.role==="cashier" ? `<button class="btn btn-outline" id="closeDayHeaderBtn">Close day &amp; get report</button>` : ""}
+        ${state.currentUser.role==="cashier" ? `${stockBtnHtml()}<button class="btn btn-outline" id="reprintBtn">🖨️ Last receipt</button><button class="btn btn-outline" id="closeDayHeaderBtn">Close day &amp; get report</button>` : ""}
         <a class="link" id="myAccountLink">My account</a>
         <a class="link" id="logoutLink">Sign out</a>
       </div>
@@ -1121,11 +1322,13 @@ function renderShell(el, contentFn){
   `;
   el.appendChild(shell);
   $("#logoutLink").onclick = ()=>{
-    state.currentUser = null; state.cart = []; state.appliedCoupon = null;
+    state.currentUser = null; state.cart = []; state.appliedCoupon = null; state.staffMember = null;
     state.view = "login"; render();
   };
   $("#myAccountLink").onclick = openMyAccountModal;
   if($("#closeDayHeaderBtn")) $("#closeDayHeaderBtn").onclick = openCloseDayModal;
+  if($("#reprintBtn")) $("#reprintBtn").onclick = reprintLastReceipt;
+  if($("#stockBtn")) $("#stockBtn").onclick = openCashierStockModal;
   wireSyncPill();
   contentFn($("#mainArea"));
 }
@@ -1208,9 +1411,10 @@ function renderCashierView(el){
 
   function buildButton(p){
     const b = document.createElement("div");
-    b.className = "product-btn";
+    const so = productSoldOut(p);
+    b.className = "product-btn" + (so ? " soldout" : "");
     const priceLabel = (p.price===null || p.price===undefined) ? "Enter price" : money(p.price);
-    b.innerHTML = `<div class="emoji">${p.emoji||"🧾"}</div><div class="pname">${p.name}</div><div class="pprice">${priceLabel}</div>`;
+    b.innerHTML = `${so ? '<div class="soldout-tag">Sold out</div>' : ""}<div class="emoji">${p.emoji||"🧾"}</div><div class="pname">${p.name}</div><div class="pprice">${priceLabel}</div>`;
     b.onclick = ()=> addToCart(p);
     return b;
   }
@@ -1243,11 +1447,17 @@ function renderCashierView(el){
 
   const cartCol = document.createElement("div");
   cartCol.className = "cart-panel";
-  const totals = computeCartTotals(state.cart, state.appliedCoupon);
+  const totals = computeCartTotals(state.cart, state.appliedCoupon, currentStaff());
   cartCol.innerHTML = `
     <div class="cart-head"><h3>Current order</h3></div>
     <div class="cart-items" id="cartItems"></div>
     <div class="cart-foot">
+      ${state.db.meta.staffEnabled ? (state.staffMember ? `
+        <div class="applied-coupon"><span>👤 ${esc(state.staffMember.name)}</span><a id="removeStaff">Remove</a></div>
+        ${totals.staffDiscountAmt===0 && state.cart.length ? `<div style="font-size:11.5px; color:var(--crema-dim); margin-bottom:8px;">No allowance left for the items in this order.</div>` : ""}
+      ` : `
+        <button class="btn btn-outline btn-block" id="enterStaffBtn" style="margin-bottom:8px;">👤 Staff</button>
+      `) : ""}
       ${state.appliedCoupon ? `
         <div class="applied-coupon"><span>🏷️ ${state.appliedCoupon.code} — ${state.appliedCoupon.percent}% off one drink</span><a id="removeCoupon">Remove</a></div>
         ${totals.discountAmt===0 ? `<div style="font-size:11.5px; color:var(--crema-dim); margin-bottom:8px;">This coupon only applies to drinks — add a drink to use it.</div>` : ""}
@@ -1255,6 +1465,7 @@ function renderCashierView(el){
         <button class="btn btn-outline btn-block" id="enterCouponBtn" style="margin-bottom:12px;">🏷️ Enter coupon code</button>
       `}
       ${totals.discountAmt>0 ? `<div class="discount-row"><span>Discount (1 drink)</span><span>−${money(totals.discountAmt)}</span></div>` : ""}
+      ${totals.staffDiscountAmt>0 ? `<div class="discount-row"><span>Discount</span><span>−${money(totals.staffDiscountAmt)}</span></div>` : ""}
       <div class="total-row"><span style="color:var(--crema-dim); font-size:13px;">Total</span><span class="amt">${money(totals.total)}</span></div>
       <div class="pay-toggle">
         <button data-pay="cash" class="${state.payMethod==='cash'?'active':''}">Cash</button>
@@ -1276,7 +1487,7 @@ function renderCashierView(el){
       const row = document.createElement("div");
       row.className = "cart-row";
       row.innerHTML = `
-        <div><div class="ci-name">${item.name}${item.isDrink===false ? "" : " ☕"}</div><div class="ci-meta">${money(item.price)} each</div></div>
+        <div><div class="ci-name">${item.name}${item.isDrink===false ? "" : " ☕"}</div><div class="ci-meta">${money(item.price)} each</div>${optLinesHtml(item)}</div>
         <div class="qty-ctrl">
           <button data-act="dec" data-idx="${idx}">−</button>
           <span class="mono">${item.qty}</span>
@@ -1287,7 +1498,12 @@ function renderCashierView(el){
     itemsEl.querySelectorAll("button[data-act]").forEach(b=>{
       b.onclick = ()=>{
         const idx = +b.dataset.idx;
-        if(b.dataset.act==="inc") state.cart[idx].qty++;
+        if(b.dataset.act==="inc"){
+          const l = state.cart[idx];
+          const prob = checkCartStock(state.cart.concat([{ productId:l.productId, qty:1, options:l.options||[] }]));
+          if(prob){ stockToast(prob, l.name); return; }
+          l.qty++;
+        }
         else{
           state.cart[idx].qty--;
           if(state.cart[idx].qty<=0) state.cart.splice(idx,1);
@@ -1300,8 +1516,11 @@ function renderCashierView(el){
     b.onclick = ()=>{ state.payMethod = b.dataset.pay; render(); };
   });
   $("#checkoutBtn").onclick = completeSale;
+  if($("#enterStaffBtn")) $("#enterStaffBtn").onclick = openStaffPicker;
+  if($("#removeStaff")) $("#removeStaff").onclick = ()=>{ state.staffMember = null; render(); };
   if($("#enterCouponBtn")){
     $("#enterCouponBtn").onclick = ()=>{
+      if(currentStaff()){ toast("Coupons can't be combined with a staff order","err"); return; }
       state.numpadTarget = { kind:"coupon" };
       state.numpadAmount = "";
       render();
@@ -1317,18 +1536,48 @@ function renderCashierView(el){
 /* coupon rule: applies to ONE unit only, of the highest-priced eligible
    ("drink") item in the cart — never multiplied across quantity or items,
    and never applied to non-drink items. */
-function computeCartTotals(cart, coupon){
+function computeCartTotals(cart, coupon, staffRef){
   const subtotal = cart.reduce((s,i)=>s+i.price*i.qty,0);
   let discountAmt = 0;
-  if(coupon){
+  if(coupon && !staffRef){
     const eligiblePrices = cart.filter(i=>i.isDrink!==false).map(i=>i.price);
     if(eligiblePrices.length){
       const maxPrice = Math.max(...eligiblePrices);
       discountAmt = maxPrice * (coupon.percent/100);
     }
   }
-  const total = Math.max(0, subtotal - discountAmt);
-  return { subtotal, discountAmt, total };
+  const staff = computeStaffDiscount(cart, staffRef);
+  const total = Math.max(0, subtotal - discountAmt - staff.amount);
+  return { subtotal, discountAmt, staffDiscountAmt: staff.amount, staffUnits: { drink: staff.drink, food: staff.food }, total };
+}
+
+/* ---- cart lines with optional add-ons ---- */
+function productOptionGroups(p){
+  return ((p && p.optionGroups) || []).filter(g=>g.choices && g.choices.length);
+}
+function optLinesHtml(item){
+  if(!item.options || !item.options.length) return "";
+  const labels = [];
+  item.options.forEach(o=>o.choices.forEach(c=>labels.push(esc(c.label))));
+  return labels.length ? `<div class="ci-opts">${labels.join(" · ")}</div>` : "";
+}
+function receiptOptLines(item){
+  if(!item.options || !item.options.length) return "";
+  return item.options.map(o=>o.choices.map(c=>
+    `<div class="rsub">– ${esc(c.label)}${c.price>0 ? " (+"+moneyText(c.price)+")" : ""}</div>`).join("")).join("");
+}
+/* adds a line to the cart. Identical product + identical add-ons merge into one line (qty+1);
+   open-price lines are always their own line, as before. */
+function pushCartLine(productId, name, basePrice, isDrink, options, openPrice){
+  const prob = checkCartStock(state.cart.concat([{ productId, qty:1, options }]));
+  if(prob){ stockToast(prob, name); return false; }
+  const extra = options.reduce((s,o)=>s+o.choices.reduce((a,c)=>a+(c.price||0),0),0);
+  const price = basePrice + extra;
+  const key = openPrice ? uid() : (productId + "|" + price + "|" +
+    options.map(o=>o.groupId+":"+o.choices.map(c=>c.id).sort().join(",")).join(";"));
+  const existing = openPrice ? null : state.cart.find(i=>i.key===key);
+  if(existing) existing.qty++;
+  else state.cart.push({ key, productId, name, price, qty:1, isDrink, options });
 }
 
 function addToCart(product){
@@ -1341,10 +1590,68 @@ function addToCart(product){
     if(panel) panel.scrollIntoView({behavior:"smooth", block:"center"});
     return;
   }
-  const existing = state.cart.find(i=>i.productId===product.id);
-  if(existing) existing.qty++;
-  else state.cart.push({ productId: product.id, name: product.name, price: product.price, qty: 1, isDrink: product.isDrink!==false });
-  render();
+  const pre = checkCartStock(state.cart.concat([{ productId: product.id, qty:1, options:[] }]));
+  if(pre){ stockToast(pre, product.name); return; }
+  const groups = productOptionGroups(product);
+  if(!groups.length){
+    pushCartLine(product.id, product.name, product.price, product.isDrink!==false, [], false);
+    render();
+    return;
+  }
+  openOptionsModal(product, groups, product.price, opts=>{
+    pushCartLine(product.id, product.name, product.price, product.isDrink!==false, opts, false);
+    render();
+  });
+}
+
+/* popup shown when a product has add-on options: radio groups (pick one) and checkbox groups (pick any) */
+function openOptionsModal(product, groups, basePrice, onConfirm){
+  const isReq = g => g.type==="radio" ? g.required!==false : g.required===true;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${esc(product.name)}</h3>
+      ${groups.map(g=>`
+        <div class="opt-group">
+          <h4>${esc(g.title)}<small>${g.type==="radio" ? "choose one" : "choose any"}${isReq(g) ? " · required" : ""}</small></h4>
+          ${g.choices.map(c=>`
+            <label class="opt-choice">
+              <input type="${g.type==="radio" ? "radio" : "checkbox"}" name="og_${g.id}" data-g="${g.id}" data-c="${c.id}" ${choiceOut(c) ? "disabled" : ""} />
+              <span>${esc(c.label)}${choiceOut(c) ? " · sold out" : ""}</span>
+              ${c.price>0 ? `<span class="opt-extra">+${moneyText(c.price)}</span>` : ""}
+            </label>`).join("")}
+        </div>`).join("")}
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="ogCancel">Cancel</button>
+        <button class="btn btn-primary" id="ogOk">Add</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  const okBtn = bg.querySelector("#ogOk");
+  function selection(){
+    return groups.map(g=>({
+      g, picked: g.choices.filter(c=>bg.querySelector(`input[data-g="${g.id}"][data-c="${c.id}"]`).checked)
+    }));
+  }
+  function refresh(){
+    const sel = selection();
+    const ok = sel.every(s=> !isReq(s.g) || s.picked.length>0);
+    const extra = sel.reduce((t,s)=>t+s.picked.reduce((a,c)=>a+(c.price||0),0),0);
+    okBtn.disabled = !ok;
+    okBtn.textContent = "Add — " + moneyText(basePrice + extra);
+  }
+  bg.addEventListener("change", refresh);
+  refresh();
+  bg.querySelector("#ogCancel").onclick = ()=>bg.remove();
+  okBtn.onclick = ()=>{
+    const opts = selection().filter(s=>s.picked.length).map(s=>({
+      groupId: s.g.id, title: s.g.title,
+      choices: s.picked.map(c=>({ id:c.id, label:c.label, price:c.price||0, inv:c.invUse||[] }))
+    }));
+    bg.remove();
+    onConfirm(opts);
+  };
 }
 
 /* ---- always-visible numpad panel (not a modal) ----
@@ -1398,6 +1705,7 @@ function renderNumpadPanel(host){
   host.querySelector("#npAddBtn").onclick = ()=>{
     if(locked) return;
     if(target.kind==="coupon"){
+      if(currentStaff()){ toast("Coupons can't be combined with a staff order","err"); return; }
       const code = state.numpadAmount.trim();
       if(!code){ toast("Enter a code first", "err"); return; }
       const match = activeCoupons().find(c => c.code.toUpperCase()===code.toUpperCase() && c.active!==false);
@@ -1410,9 +1718,20 @@ function renderNumpadPanel(host){
     const price = parseFloat(state.numpadAmount);
     if(isNaN(price) || price<=0){ toast("Enter an amount first", "err"); return; }
     // drink eligibility comes from how the developer set up this product — cashiers never choose it
-    state.cart.push({ productId: target.id, name: target.name, price, qty:1, isDrink: target.isDrink!==false });
+    const tgt = target;
+    const prod = state.db.products.find(p=>p.id===tgt.id);
+    const groups = productOptionGroups(prod);
     state.numpadAmount = ""; state.numpadTarget = null;
-    render();
+    if(!groups.length){
+      pushCartLine(tgt.id, tgt.name, price, tgt.isDrink!==false, [], true);
+      render();
+    } else {
+      render();
+      openOptionsModal(prod, groups, price, opts=>{
+        pushCartLine(tgt.id, tgt.name, price, tgt.isDrink!==false, opts, true);
+        render();
+      });
+    }
   };
 }
 
@@ -1423,40 +1742,57 @@ function renderNumpadPanel(host){
    their day or by who's signed in, and needs no extra state to sync. (If two
    devices finish a sale inside the same ~20s sync window they could compute
    the same number — a small, accepted trade-off at one shop's volume.) */
-function nextReceiptNumber(){
-  const todayCount = state.db.sales.filter(s=>s.date===todayStr()).length;
+function nextReceiptNumber(db){
+  const todayCount = (db || state.db).sales.filter(s=>s.date===todayStr()).length;
   return String(todayCount + 1).padStart(3, "0");
 }
 
-async function completeSale(){
-  if(state.cart.length===0) return;
-  const totals = computeCartTotals(state.cart, state.appliedCoupon);
+/* Puts the current order into `db` (a sale record, staff-allowance usage, coupon use) and returns the sale. */
+function applyOrderToDb(db, totals){
   const sale = {
     id: uid(),
-    receiptNumber: nextReceiptNumber(),
+    receiptNumber: nextReceiptNumber(db),
     cashierId: state.currentUser.id,
     cashierName: state.currentUser.name || state.currentUser.username,
-    items: state.cart.map(i=>({productId:i.productId, name:i.name, price:i.price, qty:i.qty, isDrink:i.isDrink!==false})),
+    items: state.cart.map(i=>({productId:i.productId, name:i.name, price:i.price, qty:i.qty, isDrink:i.isDrink!==false, options:i.options||[]})),
     subtotal: totals.subtotal,
     couponCode: state.appliedCoupon ? state.appliedCoupon.code : null,
     discountPercent: state.appliedCoupon ? state.appliedCoupon.percent : 0,
     discountAmt: totals.discountAmt,
+    staffDiscountAmt: totals.staffDiscountAmt || 0,
+    staffId: (totals.staffDiscountAmt>0 && state.staffMember) ? state.staffMember.id : null,
     total: totals.total,
+    inv: invForSale(),
     payment: state.payMethod,
     timestamp: nowIso(),
     date: todayStr()
   };
-  state.db.sales.push(sale);
+  db.sales.push(sale);
+  // use up the staff allowance (hidden from cashiers — only the developer sets it)
+  if(currentStaff()){
+    ["drink","food"].forEach(kind=>{
+      const q = totals.staffUnits[kind];
+      if(q>0) db.staffUsage.push({ id: uid(), staffId: state.staffMember.id, kind, qty:q, saleId: sale.id, timestamp: nowIso(), date: todayStr() });
+    });
+  }
   // coupons are single-use — mark it used the moment it's actually applied
   // in a completed sale. This is a distinct flag from a manual "Delete" so
   // the Coupons tab can show "Used" as its own status rather than just
   // vanishing the same way a developer-deleted code does.
   if(state.appliedCoupon && totals.discountAmt > 0){
-    const used = state.db.coupons.find(c => c.code.toUpperCase() === state.appliedCoupon.code.toUpperCase());
+    const used = db.coupons.find(c => c.code.toUpperCase() === state.appliedCoupon.code.toUpperCase());
     if(used){ used.deleted = true; used.active = false; used.usedInSale = true; used.updatedAt = nowIso(); }
   }
+  return sale;
+}
+
+async function completeSale(){
+  if(state.cart.length===0) return;
+  const totals = computeCartTotals(state.cart, state.appliedCoupon, currentStaff());
+  const sale = applyOrderToDb(state.db, totals);
   state.cart = [];
   state.appliedCoupon = null;
+  state.staffMember = null;
   await pushToDrive();
   render();
   if(state.db.meta.autoPrintReceipt !== false){
@@ -1489,16 +1825,25 @@ function showReceiptModal(sale){
 
 function receiptInnerHtml(sale){
   const rows = `
-    ${sale.receiptNumber ? `<div class="rline" style="font-weight:700;"><span>Receipt No.</span><span>${sale.receiptNumber}</span></div>` : ""}
-    <div class="rline"><span>${new Date(sale.timestamp).toLocaleString()}</span><span>${sale.cashierName}</span></div>
+    ${sale.receiptNumber ? `<div class="rline rnum" style="font-weight:700;"><span>Receipt No.</span><span class="num">${sale.receiptNumber}</span></div>` : ""}
+    <div class="rline"><span>${fmtDateTime(sale.timestamp)}</span><span>${sale.cashierName}</span></div>
     <hr/>
-    ${sale.items.map(i=>`<div class="rline"><span>${i.qty}× ${i.name}</span><span>${money(i.price*i.qty)}</span></div>`).join("")}
+    ${sale.items.map(i=>`<div class="rline"><span>${i.qty}× ${i.name}</span><span>${money(i.price*i.qty)}</span></div>${receiptOptLines(i)}`).join("")}
     <hr/>
     <div class="rline"><span>Subtotal</span><span>${money(sale.subtotal!=null?sale.subtotal:sale.total)}</span></div>
     ${sale.discountAmt ? `<div class="rline"><span>Coupon ${sale.couponCode} (${sale.discountPercent}%)</span><span>−${money(sale.discountAmt)}</span></div>` : ""}
+    ${sale.staffDiscountAmt ? `<div class="rline"><span>Discount</span><span>−${money(sale.staffDiscountAmt)}</span></div>` : ""}
     <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(sale.total)}</span></div>
     <div class="rline"><span>Payment</span><span style="text-transform:capitalize;">${sale.payment}</span></div>`;
   return receiptWrap(rows);
+}
+
+function reprintLastReceipt(){
+  const mine = state.db.sales.filter(s=>s.cashierId===state.currentUser.id)
+    .sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+  const sale = mine[mine.length-1];
+  if(!sale){ toast("No receipt to reprint yet","err"); return; }
+  printHTML(`<div class="receipt"><div style="text-align:center;font-size:11px;font-weight:700;">*** REPRINT ***</div>${receiptInnerHtml(sale)}</div>`, 1);
 }
 
 function openCloseDayModal(){
@@ -1515,7 +1860,7 @@ function openCloseDayModal(){
   const couponsDiscountTotal = couponsUsed.reduce((s,c)=>s+c.discountAmt,0);
   const reportRows = `
     <div class="rline"><span>Cashier</span><span>${state.currentUser.name||state.currentUser.username}</span></div>
-    <div class="rline"><span>Date</span><span>${todayStr()}</span></div>
+    <div class="rline"><span>Date</span><span>${fmtDate(todayStr())}</span></div>
     <hr/>
     <div class="rline"><span>Transactions</span><span>${todaySales.length}</span></div>
     <div class="rline"><span>Cash</span><span>${money(cash)}</span></div>
@@ -1553,20 +1898,189 @@ function openCloseDayModal(){
       closedAt: nowIso()
     };
     state.db.dayCloses.push(report);
+    state.db.dayCloses = dedupeDayCloses(state.db.dayCloses);
     await pushToDrive();
+    autoBackup(true);
     bg.remove();
     toast("Day closed. Signed out — sign in again to start a new shift.", "ok");
-    state.currentUser = null; state.cart = []; state.appliedCoupon = null;
+    state.currentUser = null; state.cart = []; state.appliedCoupon = null; state.staffMember = null;
     state.view = "login";
     render();
   };
 }
 
+/* ================= SALES REPORTS (by product, hour, cashier, payment; staff allowance = developer only) ================= */
+function addDaysStr(ds, n){ const d = new Date(ds + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0,10); }
+function analyticsRange(st){
+  const t = todayStr();
+  if(st.preset==="yesterday") return [addDaysStr(t,-1), addDaysStr(t,-1)];
+  if(st.preset==="week") return [addDaysStr(t,-6), t];
+  if(st.preset==="month") return [t.slice(0,8)+"01", t];
+  if(st.preset==="custom") return [st.from <= st.to ? st.from : st.to, st.from <= st.to ? st.to : st.from];
+  return [t, t];
+}
+function computeAnalytics(from, to){
+  const sales = state.db.sales.filter(s=>s.date>=from && s.date<=to);
+  const out = { sales, revenue:0, discounts:0, byProduct:{}, byHour:{}, byCashier:{}, byPay:{} };
+  sales.forEach(s=>{
+    out.revenue += s.total || 0;
+    out.discounts += (s.discountAmt||0) + (s.staffDiscountAmt||0);
+    (s.items||[]).forEach(i=>{
+      const p = out.byProduct[i.name] = out.byProduct[i.name] || { qty:0, rev:0 };
+      p.qty += i.qty; p.rev += i.price * i.qty;
+    });
+    const h = new Date(s.timestamp).getHours();
+    const hh = out.byHour[h] = out.byHour[h] || { n:0, rev:0 };
+    hh.n++; hh.rev += s.total || 0;
+    const c = out.byCashier[s.cashierName] = out.byCashier[s.cashierName] || { n:0, rev:0 };
+    c.n++; c.rev += s.total || 0;
+    const pm = s.payment || "other";
+    const pp = out.byPay[pm] = out.byPay[pm] || { n:0, rev:0 };
+    pp.n++; pp.rev += s.total || 0;
+  });
+  return out;
+}
+function staffUsageRows(from, to){
+  const usage = (state.db.staffUsage||[]).filter(u=>u.date>=from && u.date<=to);
+  const sales = state.db.sales.filter(s=>s.date>=from && s.date<=to && s.staffId);
+  const per = { drinkLabel:"drinks" };
+  return allStaff().map(s=>{
+    const drinks = usage.filter(u=>u.staffId===s.id && u.kind==="drink").reduce((t,u)=>t+(u.qty||0),0);
+    const food = usage.filter(u=>u.staffId===s.id && u.kind==="food").reduce((t,u)=>t+(u.qty||0),0);
+    const value = sales.filter(x=>x.staffId===s.id).reduce((t,x)=>t+(x.staffDiscountAmt||0),0);
+    return { staff:s, drinks, food, value };
+  });
+}
+function renderAnalyticsPanel(el, isDev){
+  const st = state.anRange || (state.anRange = { preset:"today", from:todayStr(), to:todayStr() });
+  const [from, to] = analyticsRange(st);
+  const a = computeAnalytics(from, to);
+  const n = a.sales.length;
+  const products = Object.entries(a.byProduct).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
+  const best = products.slice().sort((x,y)=>y.qty-x.qty).slice(0,5);
+  const maxQty = best.length ? best[0].qty : 1;
+  const hours = Object.keys(a.byHour).map(Number).sort((x,y)=>x-y);
+  const hFrom = hours.length ? hours[0] : 8, hTo = hours.length ? hours[hours.length-1] : 20;
+  const hList = []; for(let h=hFrom; h<=hTo; h++) hList.push(h);
+  const maxHour = Math.max(1, ...hList.map(h=>(a.byHour[h]||{rev:0}).rev));
+  const cashiers = Object.entries(a.byCashier).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
+  const pays = Object.entries(a.byPay).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
+  const payLabel = k => k==="cash" ? "Cash" : (k==="card" ? "Card" : k);
+  const pct = (v,t)=> t>0 ? Math.round(v/t*100) + "%" : "—";
+  const staffRows = isDev ? staffUsageRows(from, to) : [];
+  const periodLabel = { day:"day", week:"week", month:"month" };
+
+  el.innerHTML = `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        <h3 style="font-size:15px;">Sales reports</h3>
+        <button class="btn btn-outline" id="anExport">⬇️ Export to Excel</button>
+      </div>
+      <div class="inline-row" style="margin-bottom:16px;">
+        <div class="field"><label>Period</label>
+          <select id="anPreset">
+            ${[["today","Today"],["yesterday","Yesterday"],["week","Last 7 days"],["month","This month"],["custom","Choose dates"]].map(([v,l])=>`<option value="${v}" ${st.preset===v?"selected":""}>${l}</option>`).join("")}
+          </select>
+        </div>
+        ${st.preset==="custom" ? `
+          <div class="field"><label>From</label><input type="date" id="anFrom" value="${st.from}" /></div>
+          <div class="field"><label>To</label><input type="date" id="anTo" value="${st.to}" /></div>` : ""}
+      </div>
+      <div style="font-size:12px; color:var(--crema-dim); margin:-6px 0 14px;">${fmtDate(from)}${from===to ? "" : " – " + fmtDate(to)}</div>
+
+      <div class="an-grid">
+        <div class="an-stat"><b>${n}</b><span>Transactions</span></div>
+        <div class="an-stat"><b>${money(a.revenue)}</b><span>Total sales</span></div>
+        <div class="an-stat"><b>${money(n ? a.revenue/n : 0)}</b><span>Average per sale</span></div>
+        <div class="an-stat"><b>${money(a.discounts)}</b><span>Discounts given</span></div>
+      </div>
+
+      ${n===0 ? `<p style="color:var(--crema-dim); font-size:13px;">No sales in this period.</p>` : `
+      <div class="an-sec"><h4>🏆 Best sellers</h4>
+        ${best.map(p=>`<div style="display:flex; align-items:center; gap:10px; margin-bottom:6px; font-size:13px;">
+          <div style="width:34%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(p.name)}</div>
+          <div style="flex:1;"><div class="an-bar" style="width:${Math.max(3, Math.round(p.qty/maxQty*100))}%;"></div></div>
+          <div style="width:40px; text-align:right;">×${p.qty}</div></div>`).join("")}
+      </div>
+
+      <div class="an-sec"><h4>🕐 Sales by hour</h4>
+        <div class="an-hours">${hList.map(h=>{ const v = a.byHour[h]; return `<div class="col" title="${String(h).padStart(2,"0")}:00 — ${v?v.n:0} sales, ${money(v?v.rev:0)}"><div style="height:${v ? Math.max(2, Math.round(v.rev/maxHour*100)) : 0}%;"></div></div>`; }).join("")}</div>
+        <div class="an-hlabels">${hList.map(h=>`<span>${String(h).padStart(2,"0")}</span>`).join("")}</div>
+      </div>
+
+      <div class="an-sec"><h4>🧾 Sales by product</h4>
+        <table><thead><tr><th>Product</th><th>Qty</th><th style="text-align:right;">Sales</th><th style="text-align:right;">Share</th></tr></thead><tbody>
+          ${products.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td style="text-align:right;">${money(p.rev)}</td><td style="text-align:right;">${pct(p.rev, products.reduce((t,x)=>t+x.rev,0))}</td></tr>`).join("")}
+        </tbody></table>
+      </div>
+
+      <div class="an-sec"><h4>👤 Sales by cashier</h4>
+        <table><thead><tr><th>Cashier</th><th>Transactions</th><th style="text-align:right;">Sales</th><th style="text-align:right;">Average</th></tr></thead><tbody>
+          ${cashiers.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.n}</td><td style="text-align:right;">${money(c.rev)}</td><td style="text-align:right;">${money(c.n ? c.rev/c.n : 0)}</td></tr>`).join("")}
+        </tbody></table>
+      </div>
+
+      <div class="an-sec"><h4>💳 Sales by payment type</h4>
+        <table><thead><tr><th>Payment</th><th>Transactions</th><th style="text-align:right;">Sales</th><th style="text-align:right;">Share</th></tr></thead><tbody>
+          ${pays.map(p=>`<tr><td>${esc(payLabel(p.name))}</td><td>${p.n}</td><td style="text-align:right;">${money(p.rev)}</td><td style="text-align:right;">${pct(p.rev, a.revenue)}</td></tr>`).join("")}
+        </tbody></table>
+      </div>`}
+
+      ${isDev ? `
+      <div class="an-sec"><h4>👥 Staff allowance (developer only)</h4>
+        <table><thead><tr><th>Name</th><th>Allowance</th><th>Drinks used</th><th>Food used</th><th style="text-align:right;">Value given</th></tr></thead><tbody>
+          ${staffRows.map(r=>`<tr><td>${esc(r.staff.name)}${r.staff.active===false?" (disabled)":""}</td><td>${r.staff.drinksAllowed||0} drinks + ${r.staff.foodAllowed||0} food / ${periodLabel[r.staff.period]||"day"}</td><td>${r.drinks}</td><td>${r.food}</td><td style="text-align:right;">${money(r.value)}</td></tr>`).join("") || `<tr><td colspan="5" style="color:var(--crema-dim); text-align:center; padding:16px;">No staff members yet.</td></tr>`}
+        </tbody></table>
+      </div>` : ""}
+    </div>`;
+
+  $("#anPreset").onchange = e=>{ st.preset = e.target.value; render(); };
+  if(st.preset==="custom"){
+    $("#anFrom").onchange = e=>{ st.from = e.target.value || todayStr(); render(); };
+    $("#anTo").onchange = e=>{ st.to = e.target.value || todayStr(); render(); };
+  }
+  $("#anExport").onclick = ()=>{
+    if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(products.map(p=>({ Product:p.name, Qty:p.qty, Sales:p.rev }))), "By Product");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hList.map(h=>({ Hour:String(h).padStart(2,"0")+":00", Transactions:(a.byHour[h]||{n:0}).n, Sales:(a.byHour[h]||{rev:0}).rev }))), "By Hour");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashiers.map(c=>({ Cashier:c.name, Transactions:c.n, Sales:c.rev }))), "By Cashier");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pays.map(p=>({ Payment:payLabel(p.name), Transactions:p.n, Sales:p.rev }))), "By Payment");
+    if(isDev) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(staffRows.map(r=>({ Name:r.staff.name, "Drinks used":r.drinks, "Food used":r.food, "Value given":r.value }))), "Staff Allowance");
+    XLSX.writeFile(wb, "sade-sales-report-" + from + (from===to ? "" : "_to_" + to) + ".xlsx");
+  };
+}
+
+/* ================= SUPERVISOR VIEW =================
+   A supervisor can add and change menu buttons (name, price, emoji, category…), add categories,
+   and add cashier (barista) accounts — nothing else, and nothing can be deleted. */
+function isSup(){ return !!(state.currentUser && state.currentUser.role==="supervisor"); }
+function renderSupervisorView(el){
+  const tabs = [["menu","Menu buttons"],["categories","Categories"],["team",`${roleLabel('cashier')}s`]];
+  if(!tabs.some(([k])=>k===state.supTab)) state.supTab = "menu";
+  const bar = document.createElement("div");
+  bar.className = "tabs";
+  tabs.forEach(([key,label])=>{
+    const t = document.createElement("div");
+    t.className = "tab" + (state.supTab===key ? " active":"");
+    t.textContent = label;
+    t.onclick = ()=>{ state.supTab = key; render(); };
+    bar.appendChild(t);
+  });
+  el.appendChild(bar);
+  const body = document.createElement("div");
+  body.className = "sup-limited";
+  el.appendChild(body);
+  if(state.supTab==="menu") return renderMenuList(body, true);
+  if(state.supTab==="categories") return renderCategoriesList(body, true);
+  if(state.supTab==="team") return renderTeamList(body, true);
+}
+
 /* ================= ADMIN VIEW (read-only) ================= */
 function renderAdminView(el){
   const at = state.db.meta.adminTabs || {};
-  const allTabs = [["live","Live sales"],["reports","Day reports"],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]];
-  const visibleTabs = allTabs.filter(([key])=> at[key]!==false);
+  const allTabs = [["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["inventory","Inventory" + invBadge()],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]];
+  const visibleTabs = allTabs.filter(([key])=> at[key]!==false && (key!=="inventory" || (state.db.meta.inventoryEnabled && state.db.meta.inventoryAdmin!==false)));
   if(visibleTabs.length===0){
     el.innerHTML = `<div class="empty-state"><div class="big">🙈</div><p>The developer hasn't made any dashboard sections visible yet.</p></div>`;
     return;
@@ -1593,6 +2107,8 @@ function renderAdminView(el){
   if(state.adminTab==="categories") return renderCategoriesList(body, false);
   if(state.adminTab==="coupons") return renderCouponsList(body, false);
   if(state.adminTab==="team") return renderTeamList(body, false);
+  if(state.adminTab==="analytics") return renderAnalyticsPanel(body, false);
+  if(state.adminTab==="inventory") return renderInventoryPanel(body, "admin");
 }
 
 function statsForToday(){
@@ -1632,27 +2148,71 @@ function renderLiveSales(el, editable){
     </div>`;
 }
 
+/* One report per day: every cashier's closing for that date is combined. A cashier's later closing
+   already covers their whole day, so only the latest closing per cashier is counted. */
+function buildDailyReports(){
+  const byDate = {};
+  (state.db.dayCloses||[]).forEach(c=>{ (byDate[c.date] = byDate[c.date] || []).push(c); });
+  return Object.keys(byDate).sort().reverse().map(date=>{
+    const latest = {};
+    byDate[date].forEach(c=>{
+      const k = c.cashierId || c.cashierName;
+      if(!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
+    });
+    const closes = Object.values(latest).sort((a,b)=>new Date(a.closedAt)-new Date(b.closedAt));
+    const r = { date, closes, cashiers: closes.map(c=>c.cashierName), transactionCount:0, cash:0, card:0, total:0,
+                couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, ids: byDate[date].map(c=>c.id) };
+    closes.forEach(c=>{
+      const b = c.breakdown || {};
+      r.transactionCount += c.transactionCount || 0;
+      r.cash += b.cash || 0; r.card += b.card || 0; r.total += c.totalSales || 0;
+      r.couponsUsed = r.couponsUsed.concat(b.couponsUsed || []);
+      r.couponsDiscountTotal += b.couponsDiscountTotal || 0;
+      Object.entries(b.byProduct||{}).forEach(([n,q])=>{ r.byProduct[n] = (r.byProduct[n]||0) + q; });
+    });
+    return r;
+  });
+}
+
+function printDailyReport(r){
+  const perCashier = r.closes.map(c=>`<div class="rline"><span>${esc(c.cashierName)} (${c.transactionCount})</span><span>${money(c.totalSales)}</span></div>`).join("");
+  const rows = `
+    <div class="rline"><span>Date</span><span>${fmtDate(r.date)}</span></div>
+    <div class="rline"><span>Cashiers</span><span>${r.closes.length}</span></div>
+    ${perCashier}
+    <hr/>
+    <div class="rline"><span>Transactions</span><span>${r.transactionCount}</span></div>
+    <div class="rline"><span>Cash</span><span>${money(r.cash)}</span></div>
+    <div class="rline"><span>Card</span><span>${money(r.card)}</span></div>
+    <hr/>
+    ${Object.entries(r.byProduct).map(([n,q])=>`<div class="rline"><span>${esc(n)}</span><span>x${q}</span></div>`).join("")}
+    ${r.couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${r.couponsUsed.length}</span></div>${r.couponsUsed.map(cu=>`<div class="rline"><span>&nbsp;&nbsp;${esc(cu.code)} (${cu.percent}%)</span><span>−${money(cu.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(r.couponsDiscountTotal)}</span></div>` : ""}
+    <hr/>
+    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(r.total)}</span></div>`;
+  printHTML(`<div class="receipt">${receiptWrap(rows)}</div>`);
+}
+
 function renderReportsList(el, editable){
-  const closes = state.db.dayCloses.slice().reverse();
+  const days = buildDailyReports();
   el.innerHTML = `
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <h3 style="font-size:15px;">Day-close reports</h3>
+        <h3 style="font-size:15px;">Day-close reports (one per day, all cashiers combined)</h3>
         <button class="btn btn-outline" id="exportDayClosesBtn">⬇️ Export to Excel</button>
       </div>
       <table>
-        <thead><tr><th>Date</th><th>Cashier</th><th>Transactions</th><th>Cash</th><th>Card</th><th>Coupons</th><th style="text-align:right;">Total</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Cashiers</th><th>Transactions</th><th>Cash</th><th>Card</th><th>Coupons</th><th style="text-align:right;">Total</th><th></th></tr></thead>
         <tbody>
-          ${closes.map(c=>`
+          ${days.map(r=>`
             <tr>
-              <td class="mono">${c.date}</td>
-              <td>${c.cashierName}</td>
-              <td>${c.transactionCount}</td>
-              <td>${money(c.breakdown.cash)}</td>
-              <td>${money(c.breakdown.card)}</td>
-              <td>${(c.breakdown.couponsUsed||[]).length ? `${c.breakdown.couponsUsed.length} (−${money(c.breakdown.couponsDiscountTotal||0)})` : "—"}</td>
-              <td style="text-align:right;">${money(c.totalSales)}</td>
-              <td><a class="link" data-print="${c.id}">Print</a>${editable?` · <a class="link" data-delete="${c.id}" style="color:var(--err);">Delete</a>`:""}</td>
+              <td class="mono">${fmtDate(r.date)}</td>
+              <td>${r.cashiers.map(esc).join(", ")}</td>
+              <td>${r.transactionCount}</td>
+              <td>${money(r.cash)}</td>
+              <td>${money(r.card)}</td>
+              <td>${r.couponsUsed.length ? `${r.couponsUsed.length} (−${money(r.couponsDiscountTotal)})` : "—"}</td>
+              <td style="text-align:right;">${money(r.total)}</td>
+              <td><a class="link" data-print="${r.date}">Print</a>${editable?` · <a class="link" data-delete="${r.date}" style="color:var(--err);">Delete</a>`:""}</td>
             </tr>`).join("") || `<tr><td colspan="8" style="text-align:center; color:var(--crema-dim); padding:24px;">No day-close reports yet.</td></tr>`}
         </tbody>
       </table>
@@ -1660,30 +2220,17 @@ function renderReportsList(el, editable){
   $("#exportDayClosesBtn").onclick = exportDayClosesExcel;
   el.querySelectorAll("[data-print]").forEach(a=>{
     a.onclick = ()=>{
-      const c = closes.find(x=>x.id===a.dataset.print);
-      const couponsUsed = c.breakdown.couponsUsed||[];
-      const rows = `
-        <div class="rline"><span>Cashier</span><span>${c.cashierName}</span></div>
-        <div class="rline"><span>Date</span><span>${c.date}</span></div>
-        <hr/>
-        <div class="rline"><span>Transactions</span><span>${c.transactionCount}</span></div>
-        <div class="rline"><span>Cash</span><span>${money(c.breakdown.cash)}</span></div>
-        <div class="rline"><span>Card</span><span>${money(c.breakdown.card)}</span></div>
-        <hr/>
-        ${Object.entries(c.breakdown.byProduct||{}).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
-        ${couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${couponsUsed.length}</span></div>${couponsUsed.map(cu=>`<div class="rline"><span>&nbsp;&nbsp;${cu.code} (${cu.percent}%)</span><span>−${money(cu.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(c.breakdown.couponsDiscountTotal||0)}</span></div>` : ""}
-        <hr/>
-        <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(c.totalSales)}</span></div>`;
-      printHTML(`<div class="receipt">${receiptWrap(rows)}</div>`);
+      const r = days.find(x=>x.date===a.dataset.print);
+      if(r) printDailyReport(r);
     };
   });
   if(editable){
     el.querySelectorAll("[data-delete]").forEach(a=>{
       a.onclick = async ()=>{
-        const c = closes.find(x=>x.id===a.dataset.delete);
-        if(!c) return;
-        if(!confirm(`Delete the ${c.date} report for ${c.cashierName}? This can't be undone.`)) return;
-        state.db.dayCloses = state.db.dayCloses.filter(x=>x.id!==c.id);
+        const r = days.find(x=>x.date===a.dataset.delete);
+        if(!r) return;
+        if(!confirm(`Delete the report for ${fmtDate(r.date)} (all cashiers)? This can't be undone.`)) return;
+        state.db.dayCloses = state.db.dayCloses.filter(x=>x.date!==r.date);
         await pushToDrive();
         toast("Report deleted", "ok");
         render();
@@ -1709,18 +2256,23 @@ function renderReportsList(el, editable){
 /* ---- Excel exports ---- */
 function exportDayClosesExcel(){
   if(!window.XLSX){ toast("Excel library still loading, try again in a moment", "err"); return; }
-  const rows = state.db.dayCloses.map(c=>({
-    Date: c.date, Cashier: c.cashierName, Transactions: c.transactionCount,
-    Cash: c.breakdown.cash, Card: c.breakdown.card,
-    "Coupons Used": (c.breakdown.couponsUsed||[]).length,
-    "Coupon Discount Total": c.breakdown.couponsDiscountTotal||0,
-    Total: c.totalSales,
-    "Closed At": new Date(c.closedAt).toLocaleString()
+  const days = buildDailyReports();
+  const daily = days.map(r=>({
+    Date: fmtDate(r.date), Cashiers: r.cashiers.join(", "), Transactions: r.transactionCount,
+    Cash: r.cash, Card: r.card,
+    "Coupons Used": r.couponsUsed.length, "Coupon Discount Total": r.couponsDiscountTotal,
+    Total: r.total
   }));
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const perCashier = [];
+  days.forEach(r=>r.closes.forEach(c=>perCashier.push({
+    Date: fmtDate(r.date), Cashier: c.cashierName, Transactions: c.transactionCount,
+    Cash: (c.breakdown||{}).cash || 0, Card: (c.breakdown||{}).card || 0, Total: c.totalSales,
+    "Closed At": fmtDateTime(c.closedAt)
+  })));
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Day Closes");
-  XLSX.writeFile(wb, "sade-day-close-reports.xlsx");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(daily), "Day Reports");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(perCashier), "By Cashier");
+  XLSX.writeFile(wb, "sade-day-reports.xlsx");
 }
 
 function exportMonthlyExcel(monthValue){
@@ -1883,14 +2435,133 @@ function openProductModal(product){
       <div class="field"><label>Emoji</label><input id="pfEmoji" value="${product?product.emoji:"☕"}" maxlength="4" /></div>
       <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="pfDrink" style="width:auto;" ${!product || product.isDrink!==false ? "checked":""}/> Eligible for drink coupons</label></div>
       ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="pfActive" style="width:auto;" ${product.active!==false?"checked":""}/> Button visible to cashiers</label></div>` : ""}
+      <div class="field">
+        <label>Add-on options (the cashier gets a popup with these when tapping this button)</label>
+        <div id="pfGroups"></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" id="pfAddRadio">➕ Radio group</button>
+          <button type="button" class="btn btn-outline" id="pfAddCheck">➕ Checkbox group</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Stock (Inventory)</label>
+        <select id="pfInvMode">
+          <option value="none">Not tracked</option>
+          <option value="simple">Simple — takes stock off one item</option>
+          <option value="recipe">Recipe — uses several ingredients</option>
+        </select>
+        <div id="pfInvLines" style="margin-top:8px;"></div>
+        <button type="button" class="btn btn-outline" id="pfInvAdd" style="margin-top:4px;">➕ Ingredient</button>
+      </div>
       <div class="modal-actions">
-        ${!isNew ? '<button class="btn btn-danger" id="delProd">Delete</button>' : '<span></span>'}
+        ${!isNew && !isSup() ? '<button class="btn btn-danger" id="delProd">Delete</button>' : '<span></span>'}
         <button class="btn btn-outline" id="cancelProd">Cancel</button>
         <button class="btn btn-primary" id="saveProd">Save</button>
       </div>
     </div>`;
   document.body.appendChild(bg);
   $("#cancelProd").onclick = ()=>bg.remove();
+
+  /* ---- add-on option groups editor ---- */
+  let groupsDraft = JSON.parse(JSON.stringify((product && product.optionGroups) || []));
+  const gHost = bg.querySelector("#pfGroups");
+  const newChoice = ()=>({ id: uid(), label:"", price:0 });
+  function drawGroups(){
+    gHost.innerHTML = "";
+    groupsDraft.forEach((g, gi)=>{
+      const isRadio = g.type==="radio";
+      const req = isRadio ? g.required!==false : g.required===true;
+      const box = document.createElement("div");
+      box.className = "og-box";
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <b style="font-size:13px;">${isRadio ? "🔘 Radio group (pick one)" : "☑️ Checkbox group (pick any)"}</b>
+          <a class="link" data-act="rm">Remove</a>
+        </div>
+        <div class="field"><label>Title shown to the cashier (e.g. Milk)</label><input data-f="title" value="${esc(g.title)}" /></div>
+        <div class="inline-row">
+          <div class="field"><label>Number of ${isRadio ? "radio buttons" : "checkboxes"}</label><input type="number" min="1" max="12" data-f="count" value="${g.choices.length}" /></div>
+          <div class="field" style="align-self:flex-end;"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" data-f="required" style="width:auto;" ${req ? "checked" : ""}/> Required</label></div>
+        </div>
+        ${g.choices.map((c,ci)=>`
+          <div class="og-row">
+            <input data-f="label" data-ci="${ci}" placeholder="Choice ${ci+1} name" value="${esc(c.label)}" />
+            <input data-f="price" data-ci="${ci}" type="number" step="0.01" min="0" placeholder="Extra price" style="max-width:110px;" value="${c.price>0 ? c.price : ""}" />
+          </div>
+          ${invItemsActive().length ? `<div class="og-row" style="margin:-2px 0 10px;">
+            <select data-f="invItem" data-ci="${ci}" style="flex:2;"><option value="">Uses no stock</option>${invItemsActive().slice().sort(byNameCmp).map(it=>`<option value="${it.id}" ${(c.invUse && c.invUse[0] && c.invUse[0].itemId===it.id) ? "selected" : ""}>Uses ${esc(it.name)} (${esc(it.unit)})</option>`).join("")}</select>
+            <input data-f="invQty" data-ci="${ci}" type="number" step="any" min="0" placeholder="Amount" style="flex:1; min-width:70px;" value="${c.invUse && c.invUse[0] ? c.invUse[0].qty : ""}" />
+          </div>` : ""}`).join("")}`;
+      box.addEventListener("input", e=>{
+        const f = e.target.dataset.f;
+        if(f==="title") g.title = e.target.value;
+        else if(f==="label") g.choices[+e.target.dataset.ci].label = e.target.value;
+        else if(f==="price") g.choices[+e.target.dataset.ci].price = parseFloat(e.target.value) || 0;
+      });
+      box.addEventListener("change", e=>{
+        const f = e.target.dataset.f;
+        if(f==="required") g.required = e.target.checked;
+        if(f==="invItem"){
+          const c = g.choices[+e.target.dataset.ci];
+          const prev = (c.invUse && c.invUse[0]) ? c.invUse[0].qty : 1;
+          c.invUse = e.target.value ? [{ itemId: e.target.value, qty: prev || 1 }] : [];
+          drawGroups();
+        }
+        if(f==="invQty"){
+          const c = g.choices[+e.target.dataset.ci];
+          if(c.invUse && c.invUse[0]) c.invUse[0].qty = parseFloat(e.target.value) || 0;
+        }
+        if(f==="count"){
+          const n = Math.max(1, Math.min(12, parseInt(e.target.value,10) || 1));
+          while(g.choices.length < n) g.choices.push(newChoice());
+          g.choices.length = n;
+          drawGroups();
+        }
+      });
+      box.querySelector('[data-act="rm"]').onclick = ()=>{ groupsDraft.splice(gi,1); drawGroups(); };
+      gHost.appendChild(box);
+    });
+  }
+  bg.querySelector("#pfAddRadio").onclick = ()=>{
+    groupsDraft.push({ id: uid(), type:"radio", title:"", required:true, choices:[newChoice(), newChoice()] });
+    drawGroups();
+  };
+  bg.querySelector("#pfAddCheck").onclick = ()=>{
+    groupsDraft.push({ id: uid(), type:"check", title:"", required:false, choices:[newChoice(), newChoice()] });
+    drawGroups();
+  };
+  drawGroups();
+
+  /* ---- stock use (Inventory) ---- */
+  let invMode = (product && product.invMode) || "none";
+  let invDraft = JSON.parse(JSON.stringify((product && product.invUse) || []));
+  const invHost = bg.querySelector("#pfInvLines");
+  function drawInv(){
+    const items = invItemsActive().slice().sort(byNameCmp);
+    bg.querySelector("#pfInvMode").value = invMode;
+    bg.querySelector("#pfInvAdd").style.display = (invMode==="recipe" && items.length) ? "" : "none";
+    if(invMode==="none"){ invHost.innerHTML = ""; return; }
+    if(items.length===0){ invHost.innerHTML = `<p style="font-size:12px; color:var(--crema-dim);">No stock items yet — add them in the Inventory tab first.</p>`; return; }
+    if(invMode==="simple"){ invDraft = invDraft.slice(0,1); if(invDraft.length===0) invDraft = [{ itemId:"", qty:1 }]; }
+    if(invMode==="recipe" && invDraft.length===0) invDraft = [{ itemId:"", qty:1 }];
+    invHost.innerHTML = invDraft.map((u,i)=>`
+      <div class="og-row">
+        <select data-i="${i}" data-f="item" style="flex:2;"><option value="">Choose item…</option>${items.map(it=>`<option value="${it.id}" ${u.itemId===it.id?"selected":""}>${esc(it.name)} (${esc(it.unit)})</option>`).join("")}</select>
+        <input data-i="${i}" data-f="qty" type="number" step="any" min="0" value="${u.qty}" style="flex:1; min-width:70px;" />
+        ${invMode==="recipe" && invDraft.length>1 ? `<a class="link" data-i="${i}" data-f="rm" style="align-self:center; color:var(--err);">✕</a>` : ""}
+      </div>`).join("") + `<div style="font-size:11.5px; color:var(--crema-dim);">${invMode==="simple" ? "Amount taken off this item for each one sold." : "Amount of each ingredient used for each one sold."}</div>`;
+  }
+  bg.querySelector("#pfInvMode").onchange = e=>{ invMode = e.target.value; drawInv(); };
+  bg.querySelector("#pfInvAdd").onclick = ()=>{ invDraft.push({ itemId:"", qty:1 }); drawInv(); };
+  invHost.addEventListener("change", e=>{
+    const i = +e.target.dataset.i, f = e.target.dataset.f;
+    if(f==="item") invDraft[i].itemId = e.target.value;
+    if(f==="qty") invDraft[i].qty = parseFloat(e.target.value) || 0;
+  });
+  invHost.addEventListener("click", e=>{
+    if(e.target.dataset.f==="rm"){ invDraft.splice(+e.target.dataset.i,1); drawInv(); }
+  });
+  drawInv();
   $("#saveProd").onclick = async ()=>{
     const name = $("#pfName").value.trim();
     const priceRaw = $("#pfPrice").value.trim();
@@ -1898,17 +2569,28 @@ function openProductModal(product){
     const categoryId = $("#pfCat").value;
     const isDrink = $("#pfDrink").checked;
     if(!name || (priceRaw!=="" && isNaN(price))){ toast("Enter a name, and either a price or leave it blank for open price","err"); return; }
+    const cleanGroups = [];
+    for(const g of groupsDraft){
+      const choices = g.choices.map(c=>({ id:c.id, label:(c.label||"").trim(), price: Math.max(0, +c.price || 0), invUse:(c.invUse||[]).filter(u=>u.itemId && u.qty>0) })).filter(c=>c.label);
+      const title = (g.title||"").trim();
+      if(!title && choices.length===0) continue;   // completely blank group — ignore it
+      if(!title){ toast("Give every add-on group a title","err"); return; }
+      if(choices.length===0){ toast(`"${title}" needs at least one named choice`,"err"); return; }
+      cleanGroups.push({ id:g.id, type:g.type, title, required: g.type==="radio" ? g.required!==false : g.required===true, choices });
+    }
+    const cleanUse = invMode==="none" ? [] : invDraft.filter(u=>u.itemId && u.qty>0).map(u=>({ itemId:u.itemId, qty:u.qty }));
+    if(invMode!=="none" && cleanUse.length===0){ toast("Choose a stock item and amount, or set Stock to “Not tracked”","err"); return; }
     if(isNew){
       const maxOrder = state.db.products.reduce((m,p)=>Math.max(m, p.order??0), -1);
       state.db.products.push({
         id: uid(), name, price, categoryId,
-        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink, active:true, order: maxOrder+1,
+        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink, active:true, order: maxOrder+1, optionGroups: cleanGroups, invMode, invUse: cleanUse,
         updatedAt: nowIso()
       });
     } else {
       Object.assign(product, {
         name, price, categoryId,
-        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink,
+        emoji: $("#pfEmoji").value.trim()||"🧾", isDrink, optionGroups: cleanGroups, invMode, invUse: cleanUse,
         active: $("#pfActive").checked, updatedAt: nowIso()
       });
     }
@@ -1916,7 +2598,7 @@ function openProductModal(product){
     bg.remove();
     render();
   };
-  if(!isNew){
+  if(!isNew && !isSup()){
     $("#delProd").onclick = async ()=>{
       product.deleted = true; product.active = false; product.updatedAt = nowIso();
       await pushToDrive();
@@ -1931,7 +2613,7 @@ function renderCategoriesList(el, editable){
   const cats = categoriesSorted();
   el.innerHTML = `<div class="card">
     <h3 style="margin-bottom:6px; font-size:15px;">Categories (${editable?"editable":"view only"})</h3>
-    ${editable ? `<div class="drag-hint">Drag to reorder how categories appear on the cashier screen.</div>` : ""}
+    ${editable && !isSup() ? `<div class="drag-hint">Drag to reorder how categories appear on the cashier screen.</div>` : ""}
     <div id="catList"></div>
     ${editable?'<button class="btn btn-primary" id="addCatBtn" style="margin-top:10px;">Add category</button>':""}
   </div>`;
@@ -1940,9 +2622,9 @@ function renderCategoriesList(el, editable){
     const count = sortedProducts().filter(p=>p.categoryId===cat.id).length;
     const row = document.createElement("div");
     row.className = "cat-row";
-    row.style.cursor = editable ? "grab" : "default";
-    row.innerHTML = `<div><div class="cname">${cat.name}</div><div class="ccount">${count} item${count===1?"":"s"}</div></div>${editable?'<a class="link">Edit</a>':""}`;
-    if(editable){
+    row.style.cursor = (editable && !isSup()) ? "grab" : "default";
+    row.innerHTML = `<div><div class="cname">${cat.name}</div><div class="ccount">${count} item${count===1?"":"s"}</div></div>${editable && !isSup()?'<a class="link">Edit</a>':""}`;
+    if(editable && !isSup()){
       row.draggable = true;
       row.querySelector("a").onclick = ()=>openCategoryModal(cat);
       row.addEventListener("dragstart", e=>{ state.dragCategoryId = cat.id; row.classList.add("dragging"); });
@@ -2142,7 +2824,7 @@ function renderTeamList(el, editable){
   el.innerHTML = `<div class="card"><h3 style="margin-bottom:12px; font-size:15px;">Team (${editable?"editable":"view only"})</h3>
     <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
     <tbody id="teamBody"></tbody></table>
-    ${editable?'<button class="btn btn-primary" id="addUserBtn" style="margin-top:14px;">Add cashier / admin</button>':""}
+    ${editable?`<button class="btn btn-primary" id="addUserBtn" style="margin-top:14px;">${isSup() ? "Add " + roleLabel('cashier') : "Add cashier / admin"}</button>`:""}
     </div>`;
   const body = $("#teamBody");
   if(visibleUsers.length===0){
@@ -2152,7 +2834,7 @@ function renderTeamList(el, editable){
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${u.name}</td><td class="mono">${u.username}</td><td>${roleLabel(u.role)}</td>
       <td style="color:${u.active===false?'var(--err)':'var(--ok)'};">${u.active===false?"Disabled":"Active"}</td>
-      ${editable?`<td><a class="link" data-uid="${u.id}">Edit</a></td>`:""}`;
+      ${editable?`<td>${(!isSup() || u.role==="cashier") ? `<a class="link" data-uid="${u.id}">Edit</a>` : ""}</td>`:""}`;
     body.appendChild(tr);
   });
   if(editable){
@@ -2175,13 +2857,14 @@ function openUserModal(user){
       <div class="field"><label>Role</label>
         <select id="ufRole">
           <option value="cashier" ${user&&user.role==='cashier'?'selected':''}>${roleLabel('cashier')}</option>
-          <option value="admin" ${user&&user.role==='admin'?'selected':''}>${roleLabel('admin')}</option>
+          ${isSup() ? "" : `<option value="admin" ${user&&user.role==='admin'?'selected':''}>${roleLabel('admin')}</option>
+          <option value="supervisor" ${user&&user.role==='supervisor'?'selected':''}>${roleLabel('supervisor')}</option>`}
         </select>
       </div>
       <div class="field"><label>${isNew?"Password":"New password (leave blank to keep current)"}</label><input id="ufPass" type="password" /></div>
       ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="ufActive" style="width:auto;" ${user.active!==false?"checked":""}/> Account active</label></div>` : ""}
       <div class="modal-actions">
-        ${!isNew ? '<button class="btn btn-danger" id="delUser">Remove</button>' : '<span></span>'}
+        ${!isNew && !isSup() ? '<button class="btn btn-danger" id="delUser">Remove</button>' : '<span></span>'}
         <button class="btn btn-outline" id="cancelUser">Cancel</button>
         <button class="btn btn-primary" id="saveUser">Save</button>
       </div>
@@ -2191,7 +2874,7 @@ function openUserModal(user){
   $("#saveUser").onclick = async ()=>{
     const name = $("#ufName").value.trim();
     const username = $("#ufUser").value.trim();
-    const role = $("#ufRole").value;
+    const role = isSup() ? "cashier" : $("#ufRole").value;
     const pass = $("#ufPass").value;
     if(!name || !username){ toast("Name and username are required","err"); return; }
     if(isNew){
@@ -2210,7 +2893,7 @@ function openUserModal(user){
     bg.remove();
     render();
   };
-  if(!isNew){
+  if(!isNew && !isSup()){
     $("#delUser").onclick = async ()=>{
       user.deleted = true; user.active = false; user.updatedAt = nowIso();
       await pushToDrive();
@@ -2300,7 +2983,7 @@ function renderSettingsPanel(el){
       <button class="btn btn-primary btn-block" id="saveSettingsBtn">Save settings</button>
     </div>`;
 
-  const adminTabLabels = { live:"Live sales", reports:"Day reports", menu:"Menu", categories:"Categories", coupons:"Coupons", team:"Team" };
+  const adminTabLabels = { live:"Live sales", reports:"Day reports", analytics:"Sales reports (by product, hour, cashier, payment)", menu:"Menu", categories:"Categories", coupons:"Coupons", team:"Team" };
   const adminTabsDraft = { ...(m.adminTabs||{}) };
   const checklist = $("#adminTabsChecklist");
   Object.keys(adminTabLabels).forEach(key=>{
@@ -2400,6 +3083,597 @@ function renderSettingsPanel(el){
   };
 }
 
+/* ================= INVENTORY =================
+   Items (coffee beans, milk, cups…) and every change to them are stored as records:
+   Received (+), Waste (−), Count (sets the exact number). Sales take stock off automatically:
+   "simple" = a menu button takes stock off one item, "recipe" = a button uses several ingredients
+   (add-on choices can use stock too). Current stock = latest count + later received − later waste − sales since then.
+   The developer's Inventory switch controls whether it shows to admins and cashiers. */
+const byNameCmp = (a,b)=>String(a.name).localeCompare(String(b.name));
+const INV_UNITS = ["pcs","kg","g","L","ml","pack","box","bottle","bag"];
+function fmtQty(n){ return String(Math.round((+n||0)*100)/100); }
+function invItemsActive(includeInactive){ return (state.db.invItems||[]).filter(i=>!i.deleted && (includeInactive || i.active!==false)); }
+
+let _invMemo = { key:"", map:null };
+function invStockMap(){
+  const db = state.db;
+  const key = db.sales.length + "|" + (db.invMoves||[]).length + "|" + (db.invItems||[]).length;
+  if(_invMemo.key===key && _invMemo.map) return _invMemo.map;
+  const map = {}, base = {};
+  invItemsActive(true).forEach(i=>{ map[i.id] = 0; });
+  (db.invMoves||[]).forEach(m=>{
+    if(m.type==="count" && map[m.itemId]!==undefined){
+      const b = base[m.itemId];
+      if(!b || m.timestamp > b.ts) base[m.itemId] = { ts:m.timestamp, qty:m.qty };
+    }
+  });
+  Object.keys(base).forEach(id=>{ map[id] = base[id].qty; });
+  (db.invMoves||[]).forEach(m=>{
+    if(m.type==="count" || map[m.itemId]===undefined) return;
+    const b = base[m.itemId];
+    if(b && m.timestamp <= b.ts) return;
+    map[m.itemId] += (m.type==="receive" ? m.qty : -m.qty);
+  });
+  db.sales.forEach(s=>{
+    if(!s.inv) return;
+    Object.keys(s.inv).forEach(id=>{
+      if(map[id]===undefined) return;
+      const b = base[id];
+      if(b && s.timestamp <= b.ts) return;
+      map[id] -= s.inv[id];
+    });
+  });
+  Object.keys(map).forEach(id=>{ map[id] = Math.round(map[id]*1000)/1000; });
+  _invMemo = { key, map };
+  return map;
+}
+function invStatus(item, qty){
+  if(qty <= 0) return "out";
+  if((item.min||0) > 0 && qty <= item.min) return "low";
+  return "ok";
+}
+function invAlertCount(){
+  const stock = invStockMap();
+  return invItemsActive().filter(i=>invStatus(i, stock[i.id]||0)!=="ok").length;
+}
+function invBadge(){ const n = invAlertCount(); return n ? " (" + n + ")" : ""; }
+
+function productUse(p){
+  return (p && p.invMode && p.invMode!=="none" && p.invUse) ? p.invUse.filter(u=>u.itemId && u.qty>0) : [];
+}
+function cartInvNeeds(lines){
+  const need = {};
+  lines.forEach(l=>{
+    const p = state.db.products.find(x=>x.id===l.productId);
+    productUse(p).forEach(u=>{ need[u.itemId] = (need[u.itemId]||0) + u.qty * l.qty; });
+    (l.options||[]).forEach(o=>(o.choices||[]).forEach(c=>(c.inv||[]).forEach(u=>{
+      if(u.itemId && u.qty>0) need[u.itemId] = (need[u.itemId]||0) + u.qty * l.qty;
+    })));
+  });
+  return need;
+}
+function invForSale(){
+  const need = cartInvNeeds(state.cart), out = {};
+  Object.keys(need).forEach(k=>{ out[k] = Math.round(need[k]*1000)/1000; });
+  return Object.keys(out).length ? out : undefined;
+}
+/* returns {item, left} for the first item that can't cover the lines, or null */
+function checkCartStock(lines){
+  if(!state.db.meta.inventoryEnabled) return null;
+  const need = cartInvNeeds(lines), stock = invStockMap();
+  for(const id of Object.keys(need)){
+    const it = invItemsActive().find(x=>x.id===id);
+    if(!it || it.block===false) continue;
+    const have = stock[id] || 0;
+    if(need[id] > have + 1e-9) return { item: it, left: Math.max(0, have) };
+  }
+  return null;
+}
+function stockToast(prob, name){
+  if(prob.left <= 0) toast(`${name} is sold out — ${prob.item.name} has run out`, "err");
+  else toast(`Not enough ${prob.item.name} — only ${fmtQty(prob.left)} ${prob.item.unit} in stock`, "err");
+}
+function invItemOut(itemId, qty){
+  const it = invItemsActive().find(x=>x.id===itemId);
+  if(!it || it.block===false) return false;
+  return (invStockMap()[itemId]||0) < (qty||1) - 1e-9;
+}
+function productSoldOut(p){
+  if(!state.db.meta.inventoryEnabled) return false;
+  return productUse(p).some(u=>invItemOut(u.itemId, u.qty));
+}
+function choiceOut(c){
+  if(!state.db.meta.inventoryEnabled) return false;
+  return (c.invUse||[]).some(u=>u.itemId && invItemOut(u.itemId, u.qty));
+}
+function stockBtnHtml(){
+  const m = state.db.meta;
+  if(!m.inventoryEnabled || m.inventoryCashier==="mark") return "";
+  return `<button class="btn btn-outline" id="stockBtn">📦 Stock${invBadge()}</button>`;
+}
+
+function invWho(){ return (state.currentUser && (state.currentUser.name || state.currentUser.username)) || ""; }
+
+/* receive / waste / count */
+function openInvMoveModal(item, type, onDone){
+  const stock = invStockMap()[item.id] || 0;
+  const titles = { receive:"➕ Received", waste:"🗑 Waste", count:"✏️ Count" };
+  const hints = {
+    receive:"How much arrived?",
+    waste:"How much was thrown away or lost?",
+    count:"How much is on the shelf right now?"
+  };
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${titles[type]} — ${esc(item.name)}</h3>
+      <p style="font-size:12.5px; color:var(--crema-dim); margin-bottom:10px;">In stock now: <b>${fmtQty(stock)} ${esc(item.unit)}</b></p>
+      <div class="field"><label>${hints[type]} (${esc(item.unit)})</label><input id="imQty" type="number" inputmode="decimal" step="any" min="0" /></div>
+      ${type==="waste" ? `<div class="field"><label>Reason</label><select id="imNote">
+          <option>Spoiled / expired</option><option>Dropped or spilled</option><option>Staff use</option><option>Other</option></select></div>` : ""}
+      ${type==="receive" ? `<div class="field"><label>Note (optional, e.g. supplier)</label><input id="imNote" /></div>` : ""}
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="imCancel">Cancel</button>
+        <button class="btn btn-primary" id="imSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  const qtyEl = bg.querySelector("#imQty");
+  qtyEl.focus();
+  bg.querySelector("#imCancel").onclick = ()=>bg.remove();
+  async function save(){
+    const qty = parseFloat(qtyEl.value);
+    if(isNaN(qty) || qty < 0 || (type!=="count" && qty===0)){ toast("Enter an amount","err"); return; }
+    const noteEl = bg.querySelector("#imNote");
+    state.db.invMoves.push({ id: uid(), itemId: item.id, type, qty, note: noteEl ? noteEl.value.trim() : "", by: invWho(), timestamp: nowIso() });
+    await pushToDrive();
+    bg.remove();
+    toast(type==="count" ? "Stock count saved" : (type==="receive" ? "Delivery added" : "Waste recorded"), "ok");
+    if(onDone) onDone();
+  }
+  bg.querySelector("#imSave").onclick = save;
+  qtyEl.addEventListener("keydown", e=>{ if(e.key==="Enter") save(); });
+}
+
+/* developer: add / edit an item */
+function openInvItemModal(item){
+  const isNew = !item;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "New stock item" : "Edit stock item"}</h3>
+      <div class="field"><label>Name (e.g. Coffee beans)</label><input id="iiName" value="${item ? esc(item.name) : ""}" /></div>
+      <div class="inline-row">
+        <div class="field"><label>Unit</label><select id="iiUnit">${INV_UNITS.map(u=>`<option ${(item ? item.unit : "pcs")===u ? "selected" : ""}>${u}</option>`).join("")}</select></div>
+        ${isNew ? `<div class="field"><label>Starting stock</label><input id="iiStart" type="number" step="any" min="0" value="0" /></div>` : ""}
+      </div>
+      <div class="inline-row">
+        <div class="field"><label>Warn when stock is at or below</label><input id="iiMin" type="number" step="any" min="0" value="${item ? (item.min||0) : 0}" /></div>
+        <div class="field"><label>Refill up to (shopping list)</label><input id="iiTarget" type="number" step="any" min="0" value="${item && item.target ? item.target : ""}" placeholder="auto" /></div>
+      </div>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="iiBlock" style="width:auto;" ${!item || item.block!==false ? "checked" : ""}/> Don't allow selling when it runs out (shows “Sold out”)</label></div>
+      ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="iiActive" style="width:auto;" ${item.active!==false ? "checked" : ""}/> Active</label></div>` : ""}
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="iiDel">Delete</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="iiCancel">Cancel</button>
+        <button class="btn btn-primary" id="iiSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#iiCancel").onclick = ()=>bg.remove();
+  bg.querySelector("#iiSave").onclick = async ()=>{
+    const name = bg.querySelector("#iiName").value.trim();
+    if(!name){ toast("Enter a name","err"); return; }
+    if(invItemsActive(true).some(i=>i.name.toLowerCase()===name.toLowerCase() && (!item || i.id!==item.id))){ toast("An item with this name already exists","err"); return; }
+    const unit = bg.querySelector("#iiUnit").value;
+    const min = Math.max(0, parseFloat(bg.querySelector("#iiMin").value) || 0);
+    const target = Math.max(0, parseFloat(bg.querySelector("#iiTarget").value) || 0);
+    const block = bg.querySelector("#iiBlock").checked;
+    if(isNew){
+      const rec = { id: uid(), name, unit, min, target, block, active:true, createdAt: nowIso(), updatedAt: nowIso() };
+      state.db.invItems.push(rec);
+      const start = parseFloat(bg.querySelector("#iiStart").value) || 0;
+      if(start > 0) state.db.invMoves.push({ id: uid(), itemId: rec.id, type:"count", qty:start, note:"Starting stock", by: invWho(), timestamp: nowIso() });
+    } else {
+      Object.assign(item, { name, unit, min, target, block, active: bg.querySelector("#iiActive").checked, updatedAt: nowIso() });
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    bg.querySelector("#iiDel").onclick = async ()=>{
+      if(!confirm(`Delete "${item.name}"? Menu buttons that use it will stop tracking it.`)) return;
+      item.deleted = true; item.active = false; item.updatedAt = nowIso();
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
+function openInvHistory(){
+  const names = {}; invItemsActive(true).forEach(i=>{ names[i.id] = i; });
+  const rows = (state.db.invMoves||[]).filter(m=>names[m.itemId]).slice().sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp))).slice(0,60);
+  const desc = m=>{
+    const u = esc(names[m.itemId].unit), q = fmtQty(m.qty);
+    if(m.type==="receive") return `<span style="color:var(--ok);">+${q} ${u}</span> received`;
+    if(m.type==="waste") return `<span style="color:var(--err);">−${q} ${u}</span> waste`;
+    return `counted <b>${q} ${u}</b>`;
+  };
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal" style="max-height:80vh; overflow:auto;">
+      <h3>Recent stock changes</h3>
+      ${rows.length ? `<table><thead><tr><th>When</th><th>Item</th><th>Change</th><th>By</th></tr></thead><tbody>
+        ${rows.map(m=>`<tr><td class="mono" style="white-space:nowrap;">${fmtDateTime(m.timestamp)}</td><td>${esc(names[m.itemId].name)}</td><td>${desc(m)}${m.note ? `<div class="inv-sub">${esc(m.note)}</div>` : ""}</td><td>${esc(m.by||"")}</td></tr>`).join("")}
+      </tbody></table>` : `<p style="color:var(--crema-dim); font-size:13px;">Nothing recorded yet.</p>`}
+      <div class="modal-actions"><button class="btn btn-outline btn-block" id="ihClose">Close</button></div>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#ihClose").onclick = ()=>bg.remove();
+}
+
+function openShoppingList(){
+  const stock = invStockMap();
+  const list = invItemsActive().filter(i=>invStatus(i, stock[i.id]||0)!=="ok").sort(byNameCmp).map(i=>{
+    const have = stock[i.id] || 0;
+    const target = i.target > 0 ? i.target : Math.max(1, (i.min||0) * 2);
+    return { item:i, have, order: Math.max(0, Math.round((target - have)*100)/100) };
+  });
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal" style="max-height:80vh; overflow:auto;">
+      <h3>🛒 Shopping list</h3>
+      ${list.length ? `<table><thead><tr><th>Item</th><th>In stock</th><th style="text-align:right;">Order</th></tr></thead><tbody>
+        ${list.map(r=>`<tr><td>${esc(r.item.name)}</td><td>${fmtQty(r.have)} ${esc(r.item.unit)}</td><td style="text-align:right;"><b>${fmtQty(r.order)} ${esc(r.item.unit)}</b></td></tr>`).join("")}
+      </tbody></table>` : `<p style="color:var(--crema-dim); font-size:13px;">Everything is above its warning level. Nothing to order.</p>`}
+      <div class="modal-actions">
+        ${list.length ? `<button class="btn btn-outline" id="slCopy">📋 Copy</button><button class="btn btn-outline" id="slXls">⬇️ Excel</button>` : ""}
+        <button class="btn btn-primary" id="slClose">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#slClose").onclick = ()=>bg.remove();
+  if(list.length){
+    bg.querySelector("#slCopy").onclick = async ()=>{
+      const text = "Shopping list " + fmtDate(todayStr()) + "\n" + list.map(r=>`- ${r.item.name}: ${fmtQty(r.order)} ${r.item.unit}`).join("\n");
+      try{ await navigator.clipboard.writeText(text); toast("Copied","ok"); }catch(e){ toast("Couldn't copy — use Excel instead","err"); }
+    };
+    bg.querySelector("#slXls").onclick = ()=>{
+      if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(list.map(r=>({ Item:r.item.name, Unit:r.item.unit, "In stock":r.have, Order:r.order }))), "Shopping list");
+      XLSX.writeFile(wb, "sade-shopping-list-" + todayStr() + ".xlsx");
+    };
+  }
+}
+
+function invRowHtml(i, stock, opts){
+  const qty = stock[i.id] || 0, st = invStatus(i, qty);
+  return `<div class="inv-row" data-name="${esc(i.name.toLowerCase())}" style="${i.active===false ? "opacity:.5;" : ""}">
+    <div class="inv-main"><span class="inv-dot ${st}"></span>
+      <div><b>${esc(i.name)}</b><div class="inv-sub">${st==="out" ? "Out of stock" : (st==="low" ? "Running low" : "OK")}${i.min>0 ? " · warns at " + fmtQty(i.min) + " " + esc(i.unit) : ""}${i.active===false ? " · inactive" : ""}</div></div>
+      <span class="inv-qty">${fmtQty(qty)} ${esc(i.unit)}</span></div>
+    <div class="inv-actions">
+      ${opts.log ? `<button class="btn btn-outline" data-act="receive" data-id="${i.id}">➕ Received</button><button class="btn btn-outline" data-act="waste" data-id="${i.id}">🗑 Waste</button>` : ""}
+      ${opts.count ? `<button class="btn btn-outline" data-act="count" data-id="${i.id}">✏️ Count</button>` : ""}
+      ${opts.edit ? `<a class="link" data-act="edit" data-id="${i.id}">Edit</a>` : ""}
+    </div>
+  </div>`;
+}
+function wireInvRows(root, opts, refresh){
+  root.querySelectorAll("[data-act]").forEach(b=>{
+    b.onclick = ()=>{
+      const item = invItemsActive(true).find(x=>x.id===b.dataset.id);
+      if(!item) return;
+      if(b.dataset.act==="edit") openInvItemModal(item);
+      else openInvMoveModal(item, b.dataset.act, refresh);
+    };
+  });
+  const search = root.querySelector("#invSearch");
+  if(search) search.oninput = ()=>{
+    const q = search.value.trim().toLowerCase();
+    root.querySelectorAll(".inv-row").forEach(r=>{ r.style.display = (!q || r.dataset.name.includes(q)) ? "" : "none"; });
+  };
+}
+
+/* Inventory tab — developer (full) and admin (log + count) */
+function renderInventoryPanel(el, who){
+  const isDev = who==="developer";
+  const m = state.db.meta;
+  const stock = invStockMap();
+  const items = invItemsActive(isDev).slice().sort(byNameCmp);
+  const alerts = items.filter(i=>i.active!==false && invStatus(i, stock[i.id]||0)!=="ok");
+  const outN = alerts.filter(i=>invStatus(i, stock[i.id]||0)==="out").length, lowN = alerts.length - outN;
+  const opts = { log:true, count:true, edit:isDev };
+  el.innerHTML = `
+    ${isDev ? `<div class="card" style="margin-bottom:16px;">
+      <h3 style="font-size:15px; margin-bottom:10px;">Inventory settings</h3>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="invOn" style="width:auto;" ${m.inventoryEnabled?"checked":""}/> Turn on Inventory (shows it to admins and cashiers, and marks sold-out buttons)</label></div>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="invAdm" style="width:auto;" ${m.inventoryAdmin!==false?"checked":""}/> Show on the Admin dashboard</label></div>
+      <div class="field"><label>On the cashier screen</label>
+        <select id="invCash">
+          ${[["mark","Sold-out marks only"],["view","Stock list (view only)"],["log","Stock list + log received &amp; waste"]].map(([v,l])=>`<option value="${v}" ${m.inventoryCashier===v?"selected":""}>${l}</option>`).join("")}
+        </select>
+      </div>
+      ${m.inventoryEnabled ? "" : `<div style="font-size:12px; color:var(--err);">Inventory is off — admins and cashiers don't see it and nothing is blocked. Sales still keep counting stock in the background.</div>`}
+    </div>` : ""}
+    <div class="card">
+      ${alerts.length ? `<div class="banner" style="margin-bottom:12px;">⚠️ ${outN ? outN + " out of stock" : ""}${outN && lowN ? ", " : ""}${lowN ? lowN + " running low" : ""}</div>` : ""}
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+        <input id="invSearch" placeholder="🔍 Search items" style="flex:1; min-width:160px;" />
+        ${isDev ? `<button class="btn btn-primary" id="invAdd">➕ Add item</button>` : ""}
+        <button class="btn btn-outline" id="invShop">🛒 Shopping list</button>
+        <button class="btn btn-outline" id="invHist">🕘 History</button>
+      </div>
+      <div id="invList">${items.length ? items.map(i=>invRowHtml(i, stock, opts)).join("") :
+        `<p style="color:var(--crema-dim); font-size:13px; padding:16px 0;">${isDev ? "No items yet. Tap “Add item” to start — for example coffee beans, milk or cups." : "No stock items yet. The developer sets these up."}</p>`}</div>
+    </div>`;
+  if(isDev){
+    $("#invOn").onchange = async e=>{ state.db.meta.inventoryEnabled = e.target.checked; await pushToDrive(); render(); };
+    $("#invAdm").onchange = async e=>{ state.db.meta.inventoryAdmin = e.target.checked; await pushToDrive(); render(); };
+    $("#invCash").onchange = async e=>{ state.db.meta.inventoryCashier = e.target.value; await pushToDrive(); render(); };
+    $("#invAdd").onclick = ()=>openInvItemModal(null);
+  }
+  $("#invShop").onclick = openShoppingList;
+  $("#invHist").onclick = openInvHistory;
+  wireInvRows(el, opts, ()=>render());
+}
+
+/* cashier: the Stock popup */
+function openCashierStockModal(){
+  const m = state.db.meta;
+  const canLog = m.inventoryCashier==="log";
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  document.body.appendChild(bg);
+  function draw(){
+    const stock = invStockMap();
+    const items = invItemsActive().slice().sort(byNameCmp);
+    bg.innerHTML = `
+      <div class="modal" style="max-height:85vh; overflow:auto;">
+        <h3>📦 Stock</h3>
+        <input id="invSearch" placeholder="🔍 Search items" style="width:100%; margin-bottom:6px;" />
+        <div id="invList">${items.length ? items.map(i=>invRowHtml(i, stock, { log:canLog, count:false, edit:false })).join("") : `<p style="color:var(--crema-dim); font-size:13px;">No stock items yet.</p>`}</div>
+        <div class="modal-actions"><button class="btn btn-primary btn-block" id="csClose">Close</button></div>
+      </div>`;
+    bg.querySelector("#csClose").onclick = ()=>{ bg.remove(); render(); };
+    wireInvRows(bg, { log:canLog, count:false, edit:false }, draw);
+  }
+  draw();
+}
+
+/* ================= STAFF ALLOWANCE =================
+   Developer sets, per person, how many free (or discounted) drinks and foods they get per
+   day / week / month. Cashiers never see the remaining numbers — the allowance is simply
+   applied automatically when a staff member is selected on an order. Usage is stored in
+   db.staffUsage (append-only, merged across devices) and resets by period. */
+function currentStaff(){ return (state.db.meta.staffEnabled && state.staffMember) ? state.staffMember : null; }
+function allStaff(){ return (state.db.staff||[]).filter(s=>!s.deleted); }
+function activeStaff(){ return allStaff().filter(s=>s.active!==false); }
+function staffPeriodStart(period){
+  const t = todayStr();
+  const d = new Date(t+"T00:00:00Z");
+  if(period==="week"){ d.setUTCDate(d.getUTCDate() - ((d.getUTCDay()+6)%7)); return d.toISOString().slice(0,10); }
+  if(period==="month") return t.slice(0,8)+"01";
+  return t;
+}
+function staffRemaining(staff){
+  const start = staffPeriodStart(staff.period), today = todayStr();
+  const used = { drink:0, food:0 };
+  (state.db.staffUsage||[]).forEach(u=>{
+    if(u.staffId===staff.id && u.date>=start && u.date<=today && used[u.kind]!==undefined) used[u.kind] += (u.qty||0);
+  });
+  return { drink: Math.max(0,(staff.drinksAllowed||0)-used.drink), food: Math.max(0,(staff.foodAllowed||0)-used.food) };
+}
+/* the allowance goes to the highest-priced units first, up to what's left for the period */
+function computeStaffDiscount(cart, staffRef){
+  const out = { amount:0, drink:0, food:0 };
+  if(!staffRef || !state.db.meta.staffEnabled) return out;
+  const staff = allStaff().find(s=>s.id===staffRef.id);
+  if(!staff || staff.active===false) return out;
+  const rem = staffRemaining(staff);
+  const pctRaw = state.db.meta.staffDiscountPercent;
+  const pct = Math.max(0, Math.min(100, pctRaw===undefined || pctRaw===null ? 100 : pctRaw));
+  ["drink","food"].forEach(kind=>{
+    const units = [];
+    cart.forEach(i=>{
+      if((i.isDrink!==false) === (kind==="drink")) for(let k=0;k<i.qty;k++) units.push(i.price);
+    });
+    units.sort((a,b)=>b-a);
+    const n = Math.min(rem[kind], units.length);
+    out[kind] = n;
+    out.amount += units.slice(0,n).reduce((s,p)=>s+p,0) * pct / 100;
+  });
+  return out;
+}
+
+/* cashier: choose who the order is for (asks for the 4-digit PIN when that switch is on) */
+function openStaffPicker(){
+  const byName = (a,b)=>String(a.name).localeCompare(String(b.name));
+  let list = activeStaff().slice().sort(byName);
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  document.body.appendChild(bg);
+
+  function choose(staff){
+    state.staffMember = { id: staff.id, name: staff.name };
+    if(state.appliedCoupon){
+      state.appliedCoupon = null;
+      toast("Coupon removed — it can't be combined with a staff order");
+    }
+    if(state.numpadTarget && state.numpadTarget.kind==="coupon"){ state.numpadTarget = null; state.numpadAmount = ""; }
+    bg.remove();
+    render();
+  }
+  function showPin(staff){
+    bg.innerHTML = `
+      <div class="modal">
+        <h3>${esc(staff.name)}</h3>
+        <div class="field"><label>Enter 4-digit PIN</label><input id="stfPinInput" type="password" inputmode="numeric" maxlength="4" autocomplete="off" /></div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" id="stfBack">Back</button>
+          <button class="btn btn-primary" id="stfPinOk">Confirm</button>
+        </div>
+      </div>`;
+    const input = bg.querySelector("#stfPinInput");
+    input.focus();
+    async function submit(){
+      if(!/^\d{4}$/.test(input.value)){ toast("Enter the 4-digit PIN","err"); return; }
+      const hash = await sha256(staff.id+":"+input.value);
+      if(hash !== staff.pinHash){ toast("Wrong PIN","err"); input.value = ""; input.focus(); return; }
+      choose(staff);
+    }
+    bg.querySelector("#stfPinOk").onclick = submit;
+    input.addEventListener("keydown", e=>{ if(e.key==="Enter") submit(); });
+    bg.querySelector("#stfBack").onclick = showList;
+  }
+  function showList(){
+    bg.innerHTML = `
+      <div class="modal">
+        <h3>Staff</h3>
+        ${list.length ? list.map(s=>`<button class="btn btn-outline btn-block" data-sid="${s.id}" style="margin-bottom:8px;">${esc(s.name)}</button>`).join("")
+          : `<p style="color:var(--crema-dim); font-size:13px;">No staff members yet. Ask the developer to add them.</p>`}
+        <div class="modal-actions"><button class="btn btn-outline" id="stfCancel">Cancel</button></div>
+      </div>`;
+    bg.querySelector("#stfCancel").onclick = ()=>bg.remove();
+    bg.querySelectorAll("[data-sid]").forEach(b=>{
+      b.onclick = ()=>{
+        const staff = list.find(s=>s.id===b.dataset.sid);
+        if(!staff) return;
+        if(state.db.meta.staffPinRequired){
+          if(!staff.pinHash){ toast("No PIN set for this person — ask the developer","err"); return; }
+          showPin(staff);
+        } else choose(staff);
+      };
+    });
+  }
+  showList();
+  // pick up staff added on another device a moment ago, then redraw the list
+  if(navigator.onLine && state.accessToken){
+    pullFromDrive(true).then(()=>{
+      if(!document.body.contains(bg) || bg.querySelector("#stfPinInput")) return;
+      list = activeStaff().slice().sort(byName);
+      showList();
+    });
+  }
+}
+
+/* developer: the Staff tab */
+function renderStaffPanel(el){
+  const m = state.db.meta;
+  const periodLabel = { day:"day", week:"week", month:"month" };
+  el.innerHTML = `
+    <div class="card">
+      <h3 style="margin-bottom:12px; font-size:15px;">Staff allowance</h3>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="stfEnabled" style="width:auto;" ${m.staffEnabled?"checked":""}/> Turn on Staff allowance (shows a “Staff” button on the cashier screen)</label></div>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="stfPin" style="width:auto;" ${m.staffPinRequired?"checked":""}/> Ask for each person's 4-digit PIN when a cashier selects them</label></div>
+      <div class="field"><label>Discount on allowance items (%) — 100 means free</label><input type="number" id="stfPct" min="0" max="100" value="${m.staffDiscountPercent===undefined?100:m.staffDiscountPercent}" style="max-width:120px;" /></div>
+      <table style="margin-top:8px;"><thead><tr><th>Name</th><th>Allowance</th><th>Status</th><th></th></tr></thead><tbody id="staffBody"></tbody></table>
+      <button class="btn btn-primary" id="addStaffBtn" style="margin-top:14px;">➕ Add staff member</button>
+      <button class="btn btn-outline" id="addTeamStaffBtn" style="margin-top:14px; margin-left:8px;">👥 Add all team members</button>
+    </div>`;
+  $("#stfEnabled").onchange = async e=>{ state.db.meta.staffEnabled = e.target.checked; await pushToDrive(); render(); };
+  $("#stfPin").onchange = async e=>{ state.db.meta.staffPinRequired = e.target.checked; await pushToDrive(); render(); };
+  $("#stfPct").onchange = async e=>{
+    const v = Math.max(0, Math.min(100, parseFloat(e.target.value)));
+    state.db.meta.staffDiscountPercent = isNaN(v) ? 100 : v;
+    await pushToDrive(); render();
+  };
+  const body = $("#staffBody");
+  const list = allStaff();
+  if(list.length===0){
+    body.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--crema-dim); padding:24px;">No staff members yet.</td></tr>`;
+  }
+  list.forEach(s=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(s.name)}</td>
+      <td>${s.drinksAllowed||0} drinks + ${s.foodAllowed||0} food / ${periodLabel[s.period]||"day"}</td>
+      <td style="color:${s.active===false?'var(--err)':'var(--ok)'};">${s.active===false?"Disabled":"Active"}</td>
+      <td><a class="link" data-sid="${s.id}">Edit</a></td>`;
+    body.appendChild(tr);
+  });
+  body.querySelectorAll("a[data-sid]").forEach(a=>{ a.onclick = ()=>openStaffModal(allStaff().find(s=>s.id===a.dataset.sid)); });
+  $("#addStaffBtn").onclick = ()=>openStaffModal(null);
+  $("#addTeamStaffBtn").onclick = async ()=>{
+    const have = new Set(allStaff().map(s=>String(s.name).trim().toLowerCase()));
+    let n = 0;
+    activeUsers().filter(u=>u.role!=="developer" && u.active!==false).forEach(u=>{
+      const name = (u.name || u.username || "").trim();
+      if(!name || have.has(name.toLowerCase())) return;
+      state.db.staff.push({ id: uid(), name, drinksAllowed:0, foodAllowed:0, period:"day", active:true, pinHash:null, createdAt: nowIso(), updatedAt: nowIso() });
+      have.add(name.toLowerCase()); n++;
+    });
+    if(!n){ toast("Everyone from the team is already in the list","ok"); return; }
+    await pushToDrive();
+    toast(n + " added — now set each person's allowance","ok");
+    render();
+  };
+}
+
+function openStaffModal(staff){
+  const isNew = !staff;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "Add staff member" : "Edit staff member"}</h3>
+      <div class="field"><label>Name</label><input id="sfName" value="${staff?esc(staff.name):""}" /></div>
+      <div class="inline-row">
+        <div class="field"><label>Drinks per period</label><input id="sfDrinks" type="number" min="0" step="1" value="${staff?(staff.drinksAllowed||0):0}" /></div>
+        <div class="field"><label>Food per period</label><input id="sfFood" type="number" min="0" step="1" value="${staff?(staff.foodAllowed||0):0}" /></div>
+      </div>
+      <div class="field"><label>Period (counts reset automatically)</label>
+        <select id="sfPeriod">
+          ${[["day","Every day"],["week","Every week (Mon–Sun)"],["month","Every month"]].map(([v,l])=>`<option value="${v}" ${(staff?staff.period:"day")===v?"selected":""}>${l}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field"><label>${isNew ? "PIN (4 digits — only used when the PIN switch is on)" : "New PIN (4 digits — leave blank to keep the current one)"}</label><input id="sfPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off" /></div>
+      ${!isNew ? `<div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="sfActive" style="width:auto;" ${staff.active!==false?"checked":""}/> Active</label></div>` : ""}
+      <div class="modal-actions">
+        ${!isNew ? '<button class="btn btn-danger" id="delStaff">Remove</button>' : '<span></span>'}
+        <button class="btn btn-outline" id="cancelStaff">Cancel</button>
+        <button class="btn btn-primary" id="saveStaff">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#cancelStaff").onclick = ()=>bg.remove();
+  bg.querySelector("#saveStaff").onclick = async ()=>{
+    const name = bg.querySelector("#sfName").value.trim();
+    const drinks = Math.max(0, parseInt(bg.querySelector("#sfDrinks").value,10) || 0);
+    const food = Math.max(0, parseInt(bg.querySelector("#sfFood").value,10) || 0);
+    const period = bg.querySelector("#sfPeriod").value;
+    const pin = bg.querySelector("#sfPin").value.trim();
+    if(!name){ toast("Enter a name","err"); return; }
+    if(pin && !/^\d{4}$/.test(pin)){ toast("PIN must be exactly 4 digits","err"); return; }
+    if(isNew){
+      const rec = { id: uid(), name, drinksAllowed: drinks, foodAllowed: food, period, active:true, pinHash:null, createdAt: nowIso(), updatedAt: nowIso() };
+      if(pin) rec.pinHash = await sha256(rec.id+":"+pin);
+      state.db.staff.push(rec);
+    } else {
+      Object.assign(staff, { name, drinksAllowed: drinks, foodAllowed: food, period, active: bg.querySelector("#sfActive").checked, updatedAt: nowIso() });
+      if(pin) staff.pinHash = await sha256(staff.id+":"+pin);
+    }
+    await pushToDrive();
+    bg.remove();
+    render();
+  };
+  if(!isNew){
+    bg.querySelector("#delStaff").onclick = async ()=>{
+      staff.deleted = true; staff.active = false; staff.updatedAt = nowIso();
+      if(state.staffMember && state.staffMember.id===staff.id) state.staffMember = null;
+      await pushToDrive();
+      bg.remove();
+      render();
+    };
+  }
+}
+
 /* ================= DEVELOPER VIEW ================= */
 function renderDeveloperView(el){
   const toggleWrap = document.createElement("div");
@@ -2421,7 +3695,7 @@ function renderDeveloperView(el){
 
   const tabs = document.createElement("div");
   tabs.className = "tabs";
-  [["products","Menu buttons"],["categories","Categories"],["coupons","Coupons"],["settings","Settings"],["team",`${roleLabel('cashier')}s & ${roleLabel('admin')}s`],["live","Live sales"],["reports","Day reports"]].forEach(([key,label])=>{
+  [["products","Menu buttons"],["categories","Categories"],["coupons","Coupons"],["settings","Settings"],["staff","Staff"],["team",`${roleLabel('cashier')}s & ${roleLabel('admin')}s`],["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["inventory","Inventory" + invBadge()]].forEach(([key,label])=>{
     const t = document.createElement("div");
     t.className = "tab" + (state.devTab===key ? " active":"");
     t.textContent = label;
@@ -2442,7 +3716,10 @@ function renderDeveloperView(el){
   if(state.devTab==="products") return renderMenuList(body, true);
   if(state.devTab==="categories") return renderCategoriesList(body, true);
   if(state.devTab==="coupons") return renderCouponsList(body, true);
-  if(state.devTab==="settings") return renderSettingsPanel(body);
+  if(state.devTab==="settings"){ renderSettingsPanel(body); appendBackupCard(body); return; }
+  if(state.devTab==="analytics") return renderAnalyticsPanel(body, true);
+  if(state.devTab==="inventory") return renderInventoryPanel(body, "developer");
+  if(state.devTab==="staff") return renderStaffPanel(body);
   if(state.devTab==="team") return renderTeamList(body, true);
   if(state.devTab==="live") return renderLiveSales(body, true);
   if(state.devTab==="reports") return renderReportsList(body, true);
