@@ -2114,16 +2114,20 @@ function renderAdminView(el){
 function statsForToday(){
   const t = state.db.sales.filter(s=>s.date===todayStr());
   const total = t.reduce((s,x)=>s+x.total,0);
-  return { count: t.length, total, sales: t };
+  const cash = t.filter(s=>s.payment==="cash").reduce((a,x)=>a+x.total,0);
+  const card = t.filter(s=>s.payment==="card").reduce((a,x)=>a+x.total,0);
+  return { count: t.length, total, cash, card, sales: t };
 }
 
 function renderLiveSales(el, editable){
-  const {count, total, sales} = statsForToday();
+  const {count, total, cash, card, sales} = statsForToday();
   const activeCashiers = new Set(sales.map(s=>s.cashierName)).size;
   const couponsUsedToday = sales.filter(s=>s.couponCode && s.discountAmt>0);
   el.innerHTML = `
     <div class="stat-grid">
       <div class="stat"><div class="label">Today's revenue</div><div class="value">${money(total)}</div></div>
+      <div class="stat"><div class="label">Cash sales today</div><div class="value">${money(cash)}</div></div>
+      <div class="stat"><div class="label">Card sales today</div><div class="value">${money(card)}</div></div>
       <div class="stat"><div class="label">Transactions</div><div class="value">${count}</div></div>
       <div class="stat"><div class="label">Active cashiers today</div><div class="value">${activeCashiers}</div></div>
       <div class="stat"><div class="label">Coupons used today</div><div class="value">${couponsUsedToday.length}</div></div>
