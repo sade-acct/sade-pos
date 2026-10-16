@@ -1,0 +1,198 @@
+# Daily report email for Sade POS.
+# Put this file in your DATA repository (sade-pos-data) at:  .github/workflows/daily-report.yml
+# Then add two secrets there (Settings > Secrets and variables > Actions):
+#   SMTP_USER  = the email address that sends the report (e.g. your Gmail address)
+#   SMTP_PASS  = its password; for Gmail create an "App password" (Google account > Security > 2-Step Verification > App passwords)
+#   (optional) SMTP_HOST = mail server, default smtp.gmail.com
+# The receiving address and the on/off switch are set in the app: Developer > Day reports > "Daily report by email".
+name: Daily report email
+
+on:
+  schedule:
+    - cron: "30 20 * * *"      # every day at 20:30 UTC = 23:30 in Turkey / North Cyprus. Change the numbers to change the time.
+  workflow_dispatch:           # lets you press "Run workflow" to test it
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install mail library
+        run: npm install --no-save nodemailer
+      - name: Write report script
+        run: |
+          cat > daily-report.mjs <<'REPORT_SCRIPT_EOF'
+          // Sade POS — daily report by email.
+          // Reads the shop database (sade_pos_db.json), builds ONE combined report for the day
+          // (all cashiers, listed in the order they started) and emails it to the address saved
+          // in the developer dashboard. Runs every night from .github/workflows/daily-report.yml.
+          import fs from "node:fs";
+
+          const TZ = process.env.REPORT_TZ || "Europe/Istanbul";
+          const DB_FILE = process.env.DB_FILE || "sade_pos_db.json";
+          const DRY_RUN = !!process.env.DRY_RUN;
+
+          const db = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+          const meta = db.meta || {};
+          const recipients = String(meta.reportEmail || "").split(/[;,]/).map(s => s.trim()).filter(Boolean);
+          if (!meta.reportEmailEnabled || recipients.length === 0) {
+            console.log("The daily report email is switched off, or no address is saved. Nothing to send.");
+            process.exit(0);
+          }
+
+          // The app files every sale under the UTC date. If this runs just after midnight UTC, report the day before.
+          let date = process.env.REPORT_DATE;
+          if (!date) {
+            const now = new Date();
+            const d = now.getUTCHours() < 6 ? new Date(now.getTime() - 86400000) : now;
+            date = d.toISOString().slice(0, 10);
+          }
+
+          const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+          const fmtDate = ds => ds.split("-").reverse().join("/");
+          const sym = meta.currencyCode === "TRY" ? "TL" : (meta.currencySymbol || "$");
+          const money = n => {
+            const v = (Math.round((n || 0) * 100) / 100).toFixed(2);
+            return meta.currencyCode === "TRY" ? v + " " + sym : sym + v;
+          };
+          const hourOf = ts => {
+            const h = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", hour12: false }).format(new Date(ts));
+            return parseInt(h, 10) % 24;
+          };
+          const timeOf = ts => new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ts));
+          const pct = (v, t) => (t > 0 ? Math.round((v / t) * 100) + "%" : "—");
+
+          // ---- one combined report for the date (same rules as the app's Day reports tab) ----
+          const sales = (db.sales || []).filter(s => s.date === date);
+          const closes = (db.dayCloses || []).filter(c => c.date === date);
+          const per = {};
+          sales.forEach(s => {
+            const k = s.cashierId || s.cashierName;
+            const c = (per[k] = per[k] || { name: s.cashierName, start: s.timestamp, n: 0, cash: 0, card: 0, total: 0 });
+            if (s.timestamp < c.start) c.start = s.timestamp;
+            c.n++; c.total += s.total || 0;
+            if (s.payment === "cash") c.cash += s.total || 0;
+            else if (s.payment === "card") c.card += s.total || 0;
+          });
+          const latest = {};
+          closes.forEach(c => {
+            const k = c.cashierId || c.cashierName;
+            if (!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
+          });
+          Object.keys(latest).forEach(k => {
+            if (per[k]) return;                       // cashier with a close but no sales that day (e.g. 0 transactions)
+            const c = latest[k], b = c.breakdown || {};
+            per[k] = { name: c.cashierName, start: c.closedAt, n: c.transactionCount || 0, cash: b.cash || 0, card: b.card || 0, total: c.totalSales || 0 };
+          });
+          const cashiers = Object.values(per).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+
+          if (sales.length === 0 && cashiers.length === 0) {
+            console.log("No sales on " + date + ". Nothing to send.");
+            process.exit(0);
+          }
+
+          const n = cashiers.reduce((t, c) => t + c.n, 0);
+          const cash = cashiers.reduce((t, c) => t + c.cash, 0);
+          const card = cashiers.reduce((t, c) => t + c.card, 0);
+          const total = cashiers.reduce((t, c) => t + c.total, 0);
+          const coupons = sales.filter(s => s.couponCode && s.discountAmt > 0);
+          const couponTotal = coupons.reduce((t, s) => t + s.discountAmt, 0);
+          const staffDisc = sales.reduce((t, s) => t + (s.staffDiscountAmt || 0), 0);
+
+          const byProduct = {};
+          sales.forEach(s => (s.items || []).forEach(i => {
+            const p = (byProduct[i.name] = byProduct[i.name] || { qty: 0, rev: 0 });
+            p.qty += i.qty; p.rev += i.price * i.qty;
+          }));
+          const products = Object.entries(byProduct).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.rev - a.rev);
+          const best = products.slice().sort((a, b) => b.qty - a.qty).slice(0, 5);
+          const prodRev = products.reduce((t, p) => t + p.rev, 0);
+
+          const byHour = {};
+          sales.forEach(s => {
+            const h = hourOf(s.timestamp);
+            const x = (byHour[h] = byHour[h] || { n: 0, rev: 0 });
+            x.n++; x.rev += s.total || 0;
+          });
+          const hours = Object.keys(byHour).map(Number).sort((a, b) => a - b);
+
+          // ---- HTML email ----
+          const th = "text-align:left;padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;color:#666;";
+          const td = "padding:6px 8px;border-bottom:1px solid #eee;font-size:14px;";
+          const tdr = td + "text-align:right;";
+          const table = (heads, rows, rightFrom) =>
+            '<table style="border-collapse:collapse;width:100%;margin:6px 0 20px;"><thead><tr>' +
+            heads.map((h, i) => '<th style="' + th + (i >= rightFrom ? "text-align:right;" : "") + '">' + h + "</th>").join("") +
+            "</tr></thead><tbody>" +
+            rows.map(r => "<tr>" + r.map((c, i) => '<td style="' + (i >= rightFrom ? tdr : td) + '">' + c + "</td>").join("") + "</tr>").join("") +
+            "</tbody></table>";
+          const h2 = t => '<h3 style="margin:18px 0 4px;font-size:15px;">' + t + "</h3>";
+          const stat = (label, value) =>
+            '<td style="padding:10px 14px;border:1px solid #e5e5e5;border-radius:8px;"><div style="font-size:11px;color:#777;">' + label +
+            '</div><div style="font-size:20px;font-weight:700;">' + value + "</div></td>";
+
+          const html =
+            '<div style="font-family:Segoe UI,Arial,sans-serif;color:#222;max-width:680px;margin:auto;">' +
+            '<h2 style="margin:0 0 4px;">Sade POS — day report</h2>' +
+            '<div style="color:#777;margin-bottom:14px;">' + fmtDate(date) + "</div>" +
+            '<table style="border-spacing:8px;margin:0 -8px 8px;"><tr>' +
+            stat("Total sales", money(total)) + stat("Transactions", n) + stat("Cash", money(cash)) + stat("Card", money(card)) +
+            "</tr></table>" +
+            h2("Cashiers (in the order they started)") +
+            table(["Cashier", "Started", "Transactions", "Cash", "Card", "Total"],
+              cashiers.map(c => [esc(c.name), timeOf(c.start), c.n, money(c.cash), money(c.card), money(c.total)]), 2) +
+            (coupons.length || staffDisc
+              ? h2("Discounts") + table(["Type", "Amount"], [
+                  ...(coupons.length ? [["Coupons used (" + coupons.length + ")", "−" + money(couponTotal)]] : []),
+                  ...(staffDisc ? [["Staff allowance", "−" + money(staffDisc)]] : [])], 1)
+              : "") +
+            h2("Best sellers") + table(["Product", "Qty"], best.map(p => [esc(p.name), "×" + p.qty]), 1) +
+            h2("Sales by hour") + table(["Hour", "Transactions", "Sales"],
+              hours.map(h => [String(h).padStart(2, "0") + ":00", byHour[h].n, money(byHour[h].rev)]), 1) +
+            h2("Sales by product") + table(["Product", "Qty", "Sales", "Share"],
+              products.map(p => [esc(p.name), p.qty, money(p.rev), pct(p.rev, prodRev)]), 1) +
+            '<div style="color:#999;font-size:11px;margin-top:20px;">Sent automatically. Change or switch off the address in the developer dashboard (Day reports).</div>' +
+            "</div>";
+
+          const subject = "Sade POS — day report " + fmtDate(date) + " — " + money(total);
+
+          if (DRY_RUN) {
+            fs.writeFileSync("report-preview.html", html);
+            console.log("DRY RUN — would send to: " + recipients.join(", "));
+            console.log("Subject: " + subject);
+            console.log(JSON.stringify({ date, n, cash, card, total, cashiers: cashiers.map(c => c.name) }));
+            process.exit(0);
+          }
+
+          const { default: nodemailer } = await import("nodemailer");
+          if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+            console.error("Missing SMTP_USER / SMTP_PASS secrets. Add them in the repository: Settings > Secrets and variables > Actions.");
+            process.exit(1);
+          }
+          const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST || "smtp.gmail.com",
+            port: 465,
+            secure: true,
+            auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+          });
+          await transporter.sendMail({
+            from: process.env.MAIL_FROM || process.env.SMTP_USER,
+            to: recipients.join(", "),
+            subject,
+            html
+          });
+          console.log("Report for " + date + " sent to " + recipients.join(", "));
+
+          REPORT_SCRIPT_EOF
+      - name: Send the report
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+        run: node daily-report.mjs
