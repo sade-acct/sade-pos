@@ -390,8 +390,11 @@
    Fill these in to match your own private GitHub repository (see the
    in-app Setup screen for exact steps). */
 const CONFIG = {
-  GITHUB_OWNER: "sade-acct",       // GitHub username that owns the private data repo
-  GITHUB_REPO: "sade-pos-data",    // a separate PRIVATE repo — never the public site repo
+  // The same file works for every shop: on GitHub Pages the account name is read from the web
+  // address (https://<account>.github.io/...), so nothing needs editing per site.
+  GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
+  GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
+  APP_VERSION: "2026-10-15",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -500,6 +503,7 @@ function defaultDb(){
       printCopies: 1,
       staffEnabled: false, staffPinRequired: false, staffDiscountPercent: 100,
       inventoryEnabled: false, inventoryAdmin: true, inventoryCashier: "log",
+      reportEmailEnabled: false, reportEmail: "",
       receiptHeader: "", receiptFooter: "Thank you!", autoPrintReceipt: true,
       theme: {...DEFAULT_THEME}, updatedAt: nowIso()
     },
@@ -585,6 +589,8 @@ function migrateDb(db){
   if(db.meta.inventoryEnabled===undefined) db.meta.inventoryEnabled = false;
   if(db.meta.inventoryAdmin===undefined) db.meta.inventoryAdmin = true;
   if(!db.meta.inventoryCashier) db.meta.inventoryCashier = "log";
+  if(db.meta.reportEmailEnabled===undefined) db.meta.reportEmailEnabled = false;
+  if(db.meta.reportEmail===undefined) db.meta.reportEmail = "";
 
   db.staff = db.staff || [];
   db.staffUsage = db.staffUsage || [];
@@ -1072,7 +1078,7 @@ function appendBackupCard(el){
   card.style.marginTop = "16px";
   const last = lastBackupAt();
   card.innerHTML = `
-    <h3 style="font-size:15px; margin-bottom:8px;">Backups</h3>
+    <h3 style="font-size:15px; margin-bottom:8px;">Backups <span style="font-weight:400; font-size:11px; color:var(--crema-dim); margin-left:8px;">App version ${CONFIG.APP_VERSION}</span></h3>
     <p style="font-size:12.5px; color:var(--crema-dim); margin-bottom:10px;">A copy of all your data is saved automatically in the <b>backups</b> folder of the data repository (about every 4 hours while the app is in use, and whenever a day is closed). The last 30 days are kept.</p>
     <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
       <button class="btn btn-outline" id="backupNowBtn">💾 Back up now</button>
@@ -2004,7 +2010,7 @@ function renderAnalyticsPanel(el, isDev){
       </div>
 
       <div class="an-sec"><h4>🕐 Sales by hour</h4>
-        <div class="an-hours">${hList.map(h=>{ const v = a.byHour[h]; return `<div class="col" title="${String(h).padStart(2,"0")}:00 — ${v?v.n:0} sales, ${money(v?v.rev:0)}"><div style="height:${v ? Math.max(2, Math.round(v.rev/maxHour*100)) : 0}%;"></div></div>`; }).join("")}</div>
+        <div class="an-hours">${hList.map(h=>{ const v = a.byHour[h]; return `<div class="col" title="${String(h).padStart(2,"0")}:00 — ${v?v.n:0} sales, ${moneyText(v?v.rev:0)}"><div style="height:${v ? Math.max(2, Math.round(v.rev/maxHour*100)) : 0}%;"></div></div>`; }).join("")}</div>
         <div class="an-hlabels">${hList.map(h=>`<span>${String(h).padStart(2,"0")}</span>`).join("")}</div>
       </div>
 
@@ -2041,12 +2047,49 @@ function renderAnalyticsPanel(el, isDev){
   }
   $("#anExport").onclick = ()=>{
     if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
+    const rows = [], blank = ()=>rows.push([]);
+    const prodTotal = products.reduce((t,x)=>t+x.rev,0);
+    rows.push(["Sales report"]);
+    rows.push(["Period", fmtDate(from) + (from===to ? "" : " – " + fmtDate(to))]);
+    blank();
+    rows.push(["Summary"]);
+    rows.push(["Transactions", n]);
+    rows.push(["Total sales", a.revenue]);
+    rows.push(["Average per sale", n ? a.revenue/n : 0]);
+    rows.push(["Discounts given", a.discounts]);
+    blank();
+    rows.push(["Best sellers"]);
+    rows.push(["Product", "Qty"]);
+    best.forEach(p=>rows.push([p.name, p.qty]));
+    blank();
+    rows.push(["Sales by hour"]);
+    rows.push(["Hour", "Transactions", "Sales"]);
+    hList.forEach(h=>{ const v = a.byHour[h] || { n:0, rev:0 }; rows.push([String(h).padStart(2,"0") + ":00", v.n, v.rev]); });
+    blank();
+    rows.push(["Sales by product"]);
+    rows.push(["Product", "Qty", "Sales", "Share"]);
+    products.forEach(p=>rows.push([p.name, p.qty, p.rev, pct(p.rev, prodTotal)]));
+    blank();
+    rows.push(["Sales by cashier"]);
+    rows.push(["Cashier", "Transactions", "Sales", "Average"]);
+    cashiers.forEach(c=>rows.push([c.name, c.n, c.rev, c.n ? c.rev/c.n : 0]));
+    blank();
+    rows.push(["Sales by payment type"]);
+    rows.push(["Payment", "Transactions", "Sales", "Share"]);
+    pays.forEach(p=>rows.push([payLabel(p.name), p.n, p.rev, pct(p.rev, a.revenue)]));
+    if(isDev){
+      blank();
+      rows.push(["Staff allowance (developer only)"]);
+      rows.push(["Name", "Allowance", "Drinks used", "Food used", "Value given"]);
+      staffRows.forEach(r=>rows.push([
+        r.staff.name + (r.staff.active===false ? " (disabled)" : ""),
+        (r.staff.drinksAllowed||0) + " drinks + " + (r.staff.foodAllowed||0) + " food / " + (periodLabel[r.staff.period]||"day"),
+        r.drinks, r.food, r.value ]));
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch:34 }, { wch:30 }, { wch:14 }, { wch:14 }, { wch:14 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(products.map(p=>({ Product:p.name, Qty:p.qty, Sales:p.rev }))), "By Product");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hList.map(h=>({ Hour:String(h).padStart(2,"0")+":00", Transactions:(a.byHour[h]||{n:0}).n, Sales:(a.byHour[h]||{rev:0}).rev }))), "By Hour");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashiers.map(c=>({ Cashier:c.name, Transactions:c.n, Sales:c.rev }))), "By Cashier");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pays.map(p=>({ Payment:payLabel(p.name), Transactions:p.n, Sales:p.rev }))), "By Payment");
-    if(isDev) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(staffRows.map(r=>({ Name:r.staff.name, "Drinks used":r.drinks, "Food used":r.food, "Value given":r.value }))), "Staff Allowance");
+    XLSX.utils.book_append_sheet(wb, ws, "Sales report");
     XLSX.writeFile(wb, "sade-sales-report-" + from + (from===to ? "" : "_to_" + to) + ".xlsx");
   };
 }
@@ -2152,37 +2195,59 @@ function renderLiveSales(el, editable){
     </div>`;
 }
 
-/* One report per day: every cashier's closing for that date is combined. A cashier's later closing
-   already covers their whole day, so only the latest closing per cashier is counted. */
+/* One report per day. It is built from ALL sales of that date, so every cashier is included — even one
+   who did not press "Close day". Cashiers are listed in the order they started (first sale of the day). */
+function dailyReportFor(date, closes){
+  const per = {};
+  state.db.sales.filter(s=>s.date===date).forEach(s=>{
+    const k = s.cashierId || s.cashierName;
+    const c = per[k] = per[k] || { key:k, name:s.cashierName, start:s.timestamp, transactionCount:0, cash:0, card:0, total:0,
+                                    couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, closedAt:null };
+    if(s.timestamp < c.start) c.start = s.timestamp;
+    c.transactionCount++; c.total += s.total || 0;
+    if(s.payment==="cash") c.cash += s.total || 0;
+    else if(s.payment==="card") c.card += s.total || 0;
+    if(s.couponCode && s.discountAmt>0){
+      c.couponsUsed.push({ code:s.couponCode, percent:s.discountPercent, discountAmt:s.discountAmt });
+      c.couponsDiscountTotal += s.discountAmt;
+    }
+    (s.items||[]).forEach(i=>{ c.byProduct[i.name] = (c.byProduct[i.name]||0) + i.qty; });
+  });
+  // a cashier who closed but has no sales that day (e.g. a 0-transaction close) still appears, from their closing
+  const latest = {};
+  closes.forEach(c=>{
+    const k = c.cashierId || c.cashierName;
+    if(!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
+  });
+  Object.keys(latest).forEach(k=>{
+    const c = latest[k];
+    if(per[k]){ per[k].closedAt = c.closedAt; return; }
+    const b = c.breakdown || {};
+    per[k] = { key:k, name:c.cashierName, start:c.closedAt, transactionCount:c.transactionCount||0, cash:b.cash||0, card:b.card||0,
+               total:c.totalSales||0, couponsUsed:b.couponsUsed||[], couponsDiscountTotal:b.couponsDiscountTotal||0,
+               byProduct:{ ...(b.byProduct||{}) }, closedAt:c.closedAt };
+  });
+  const rows = Object.values(per).sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+  const r = { date, rows, cashiers: rows.map(x=>x.name), transactionCount:0, cash:0, card:0, total:0,
+              couponsUsed:[], couponsDiscountTotal:0, byProduct:{} };
+  rows.forEach(c=>{
+    r.transactionCount += c.transactionCount; r.cash += c.cash; r.card += c.card; r.total += c.total;
+    r.couponsUsed = r.couponsUsed.concat(c.couponsUsed); r.couponsDiscountTotal += c.couponsDiscountTotal;
+    Object.entries(c.byProduct).forEach(([n,q])=>{ r.byProduct[n] = (r.byProduct[n]||0) + q; });
+  });
+  return r;
+}
 function buildDailyReports(){
   const byDate = {};
   (state.db.dayCloses||[]).forEach(c=>{ (byDate[c.date] = byDate[c.date] || []).push(c); });
-  return Object.keys(byDate).sort().reverse().map(date=>{
-    const latest = {};
-    byDate[date].forEach(c=>{
-      const k = c.cashierId || c.cashierName;
-      if(!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
-    });
-    const closes = Object.values(latest).sort((a,b)=>new Date(a.closedAt)-new Date(b.closedAt));
-    const r = { date, closes, cashiers: closes.map(c=>c.cashierName), transactionCount:0, cash:0, card:0, total:0,
-                couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, ids: byDate[date].map(c=>c.id) };
-    closes.forEach(c=>{
-      const b = c.breakdown || {};
-      r.transactionCount += c.transactionCount || 0;
-      r.cash += b.cash || 0; r.card += b.card || 0; r.total += c.totalSales || 0;
-      r.couponsUsed = r.couponsUsed.concat(b.couponsUsed || []);
-      r.couponsDiscountTotal += b.couponsDiscountTotal || 0;
-      Object.entries(b.byProduct||{}).forEach(([n,q])=>{ r.byProduct[n] = (r.byProduct[n]||0) + q; });
-    });
-    return r;
-  });
+  return Object.keys(byDate).sort().reverse().map(date=>dailyReportFor(date, byDate[date]));
 }
 
 function printDailyReport(r){
-  const perCashier = r.closes.map(c=>`<div class="rline"><span>${esc(c.cashierName)} (${c.transactionCount})</span><span>${money(c.totalSales)}</span></div>`).join("");
+  const perCashier = r.rows.map(c=>`<div class="rline"><span>${esc(c.name)} (${c.transactionCount})</span><span>${money(c.total)}</span></div>`).join("");
   const rows = `
     <div class="rline"><span>Date</span><span>${fmtDate(r.date)}</span></div>
-    <div class="rline"><span>Cashiers</span><span>${r.closes.length}</span></div>
+    <div class="rline"><span>Cashiers</span><span>${r.rows.length}</span></div>
     ${perCashier}
     <hr/>
     <div class="rline"><span>Transactions</span><span>${r.transactionCount}</span></div>
@@ -2254,6 +2319,36 @@ function renderReportsList(el, editable){
       </div>`;
     el.appendChild(monthCard);
     $("#monthExportBtn").onclick = ()=> exportMonthlyExcel($("#monthPicker").value);
+
+    const mailCard = document.createElement("div");
+    mailCard.className = "card";
+    mailCard.style.marginTop = "16px";
+    const mm = state.db.meta;
+    mailCard.innerHTML = `
+      <h3 style="font-size:15px; margin-bottom:12px;">✉️ Daily report by email</h3>
+      <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="rmOn" style="width:auto;" ${mm.reportEmailEnabled?"checked":""}/> Send the daily report automatically every night</label></div>
+      <div class="field"><label>Send to (email address — separate several with commas)</label><input id="rmTo" type="text" inputmode="email" autocomplete="off" placeholder="owner@example.com" value="${esc(mm.reportEmail||"")}" /></div>
+      <button class="btn btn-primary" id="rmSave">Save</button>
+      <details style="margin-top:14px; font-size:12.5px; color:var(--crema-dim);">
+        <summary style="cursor:pointer;">How it is sent (one-time setup)</summary>
+        <ol style="margin:8px 0 0 18px; line-height:1.6;">
+          <li>In the <b>${esc(CONFIG.GITHUB_REPO)}</b> data repository on GitHub, create the file <b>.github/workflows/daily-report.yml</b> and paste the contents of the <b>daily-report.yml</b> file you were given.</li>
+          <li>In that repository: Settings → Secrets and variables → Actions → add the secrets <b>SMTP_USER</b> (the sending email address) and <b>SMTP_PASS</b> (for Gmail, an App Password).</li>
+          <li>The address saved here is read by that workflow every night (about 23:30). To test now: Actions tab → “Daily report email” → Run workflow.</li>
+        </ol>
+      </details>`;
+    el.appendChild(mailCard);
+    $("#rmSave").onclick = async ()=>{
+      const list = $("#rmTo").value.split(/[;,]/).map(s=>s.trim()).filter(Boolean);
+      const bad = list.find(a=>!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a));
+      if(bad){ toast(`"${bad}" is not a valid email address`,"err"); return; }
+      const on = $("#rmOn").checked;
+      if(on && list.length===0){ toast("Enter an email address first","err"); return; }
+      state.db.meta.reportEmailEnabled = on;
+      state.db.meta.reportEmail = list.join(", ");
+      await pushToDrive();
+      toast("Saved","ok");
+    };
   }
 }
 
@@ -2262,20 +2357,26 @@ function exportDayClosesExcel(){
   if(!window.XLSX){ toast("Excel library still loading, try again in a moment", "err"); return; }
   const days = buildDailyReports();
   const daily = days.map(r=>({
-    Date: fmtDate(r.date), Cashiers: r.cashiers.join(", "), Transactions: r.transactionCount,
+    Date: fmtDate(r.date),
+    Cashiers: r.cashiers.join(", "),
+    Transactions: r.transactionCount,
     Cash: r.cash, Card: r.card,
-    "Coupons Used": r.couponsUsed.length, "Coupon Discount Total": r.couponsDiscountTotal,
+    "Coupons Used": r.couponsUsed.length,
+    "Coupon Discount Total": r.couponsDiscountTotal,
     Total: r.total
   }));
-  const perCashier = [];
-  days.forEach(r=>r.closes.forEach(c=>perCashier.push({
-    Date: fmtDate(r.date), Cashier: c.cashierName, Transactions: c.transactionCount,
-    Cash: (c.breakdown||{}).cash || 0, Card: (c.breakdown||{}).card || 0, Total: c.totalSales,
-    "Closed At": fmtDateTime(c.closedAt)
-  })));
+  const perCashier = [], perProduct = [];
+  days.forEach(r=>{
+    r.rows.forEach(c=>perCashier.push({
+      Date: fmtDate(r.date), Cashier: c.name, Started: fmtDateTime(c.start).slice(11),
+      Transactions: c.transactionCount, Cash: c.cash, Card: c.card, Total: c.total
+    }));
+    Object.entries(r.byProduct).sort((a,b)=>b[1]-a[1]).forEach(([name,qty])=>perProduct.push({ Date: fmtDate(r.date), Product: name, Qty: qty }));
+  });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(daily), "Day Reports");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(perCashier), "By Cashier");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(perProduct), "By Product");
   XLSX.writeFile(wb, "sade-day-reports.xlsx");
 }
 
