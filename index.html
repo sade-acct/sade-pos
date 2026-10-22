@@ -252,12 +252,12 @@
   .modal-actions .btn{flex:1;}
 
   .receipt{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; background:#fdfbf7; color:#231a12;
+    font-family:'JetBrains Mono',monospace; font-size:calc(12.5px + 1pt); background:#fdfbf7; color:#231a12;
     border-radius:6px; padding:18px; line-height:1.6;
   }
   .receipt .rline{display:flex; justify-content:space-between;}
   .receipt hr{border:none; border-top:1px dashed #231a12; opacity:.35; margin:8px 0;}
-  .receipt .rsub{padding-left:14px; font-size:11.5px; opacity:.85; line-height:1.4;}
+  .receipt .rsub{padding-left:14px; font-size:calc(11.5px + 1pt); opacity:.85; line-height:1.4;}
   .receipt .rnum{align-items:baseline;}
   .receipt .rnum .num{font-size:1.5em; line-height:1.2;}
   .ci-opts{font-size:11px; color:var(--crema-dim); margin-top:2px; line-height:1.35;}
@@ -747,11 +747,11 @@ function receiptWrap(innerRowsHtml){
   return `
     ${m.logoDataUrl ? `<div style="text-align:center;margin-bottom:6px;"><img src="${m.logoDataUrl}" style="max-height:50px;max-width:150px;"/></div>` : ""}
     <div style="text-align:center;font-weight:700;">${m.businessName||"Sade Coffee"}</div>
-    ${m.receiptHeader ? `<div style="text-align:center;font-size:11px;white-space:pre-line;margin-top:2px;">${m.receiptHeader}</div>` : ""}
+    ${m.receiptHeader ? `<div style="text-align:center;font-size:calc(11px + 1pt);white-space:pre-line;margin-top:2px;">${m.receiptHeader}</div>` : ""}
     <hr/>
     ${innerRowsHtml}
     <hr/>
-    <div style="text-align:center;font-size:11px;white-space:pre-line;">${m.receiptFooter||"Thank you!"}</div>`;
+    <div style="text-align:center;font-size:calc(11px + 1pt);white-space:pre-line;">${m.receiptFooter||"Thank you!"}</div>`;
 }
 
 /* ---------------- LOCAL CACHE (offline resilience) ----------------
@@ -1567,6 +1567,14 @@ function optLinesHtml(item){
   item.options.forEach(o=>o.choices.forEach(c=>labels.push(esc(c.label))));
   return labels.length ? `<div class="ci-opts">${labels.join(" · ")}</div>` : "";
 }
+function optSummaryHtml(item){
+  if(!item.options || !item.options.length) return "";
+  const parts = item.options.map(o=>{
+    const ls = (o.choices||[]).map(c=>esc(c.label)).join(", ");
+    return ls;
+  }).filter(Boolean);
+  return parts.length ? ` <span style="color:var(--crema-dim);">(${parts.join(" · ")})</span>` : "";
+}
 function receiptOptLines(item){
   if(!item.options || !item.options.length) return "";
   return item.options.map(o=>o.choices.map(c=>
@@ -1849,7 +1857,7 @@ function reprintLastReceipt(){
     .sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
   const sale = mine[mine.length-1];
   if(!sale){ toast("No receipt to reprint yet","err"); return; }
-  printHTML(`<div class="receipt"><div style="text-align:center;font-size:11px;font-weight:700;">*** REPRINT ***</div>${receiptInnerHtml(sale)}</div>`, 1);
+  printHTML(`<div class="receipt"><div style="text-align:center;font-size:calc(11px + 1pt);font-weight:700;">*** REPRINT ***</div>${receiptInnerHtml(sale)}</div>`, 1);
 }
 
 function openCloseDayModal(){
@@ -1927,13 +1935,18 @@ function analyticsRange(st){
 }
 function computeAnalytics(from, to){
   const sales = state.db.sales.filter(s=>s.date>=from && s.date<=to);
-  const out = { sales, revenue:0, discounts:0, byProduct:{}, byHour:{}, byCashier:{}, byPay:{} };
+  const out = { sales, revenue:0, discounts:0, byProduct:{}, byOption:{}, byHour:{}, byCashier:{}, byPay:{} };
   sales.forEach(s=>{
     out.revenue += s.total || 0;
     out.discounts += (s.discountAmt||0) + (s.staffDiscountAmt||0);
     (s.items||[]).forEach(i=>{
       const p = out.byProduct[i.name] = out.byProduct[i.name] || { qty:0, rev:0 };
       p.qty += i.qty; p.rev += i.price * i.qty;
+      (i.options||[]).forEach(o=>(o.choices||[]).forEach(c=>{
+        const key = (o.title||"") + "\u0000" + c.label;
+        const x = out.byOption[key] = out.byOption[key] || { group:o.title||"", label:c.label, qty:0, rev:0 };
+        x.qty += i.qty; x.rev += (c.price||0) * i.qty;
+      }));
     });
     const h = new Date(s.timestamp).getHours();
     const hh = out.byHour[h] = out.byHour[h] || { n:0, rev:0 };
@@ -1971,6 +1984,7 @@ function renderAnalyticsPanel(el, isDev){
   const maxHour = Math.max(1, ...hList.map(h=>(a.byHour[h]||{rev:0}).rev));
   const cashiers = Object.entries(a.byCashier).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
   const pays = Object.entries(a.byPay).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
+  const options = Object.values(a.byOption).sort((x,y)=>y.qty-x.qty);
   const payLabel = k => k==="cash" ? "Cash" : (k==="card" ? "Card" : k);
   const pct = (v,t)=> t>0 ? Math.round(v/t*100) + "%" : "—";
   const staffRows = isDev ? staffUsageRows(from, to) : [];
@@ -2019,6 +2033,12 @@ function renderAnalyticsPanel(el, isDev){
           ${products.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td style="text-align:right;">${money(p.rev)}</td><td style="text-align:right;">${pct(p.rev, products.reduce((t,x)=>t+x.rev,0))}</td></tr>`).join("")}
         </tbody></table>
       </div>
+
+      ${options.length ? `<div class="an-sec"><h4>🧩 Add-on options (radio &amp; checkbox choices)</h4>
+        <table><thead><tr><th>Option</th><th>Choice</th><th>Qty</th><th style="text-align:right;">Extra sales</th></tr></thead><tbody>
+          ${options.map(o=>`<tr><td>${esc(o.group)}</td><td>${esc(o.label)}</td><td>${o.qty}</td><td style="text-align:right;">${o.rev>0 ? money(o.rev) : "—"}</td></tr>`).join("")}
+        </tbody></table>
+      </div>` : ""}
 
       <div class="an-sec"><h4>👤 Sales by cashier</h4>
         <table><thead><tr><th>Cashier</th><th>Transactions</th><th style="text-align:right;">Sales</th><th style="text-align:right;">Average</th></tr></thead><tbody>
@@ -2069,6 +2089,12 @@ function renderAnalyticsPanel(el, isDev){
     rows.push(["Sales by product"]);
     rows.push(["Product", "Qty", "Sales", "Share"]);
     products.forEach(p=>rows.push([p.name, p.qty, p.rev, pct(p.rev, prodTotal)]));
+    if(options.length){
+      blank();
+      rows.push(["Add-on options (radio & checkbox choices)"]);
+      rows.push(["Option", "Choice", "Qty", "Extra sales"]);
+      options.forEach(o=>rows.push([o.group, o.label, o.qty, o.rev]));
+    }
     blank();
     rows.push(["Sales by cashier"]);
     rows.push(["Cashier", "Transactions", "Sales", "Average"]);
@@ -2185,7 +2211,7 @@ function renderLiveSales(el, editable){
             <tr>
               <td class="mono">${new Date(s.timestamp).toLocaleTimeString()}</td>
               <td>${s.cashierName}</td>
-              <td>${s.items.map(i=>i.qty+"× "+i.name).join(", ")}</td>
+              <td>${s.items.map(i=>i.qty+"× "+esc(i.name)+optSummaryHtml(i)).join(", ")}</td>
               <td style="text-transform:capitalize;">${s.payment}</td>
               <td class="mono">${s.couponCode && s.discountAmt>0 ? `${s.couponCode} (−${money(s.discountAmt)})` : "—"}</td>
               <td style="text-align:right;">${money(s.total)}</td>
