@@ -1860,14 +1860,21 @@ function reprintLastReceipt(){
   printHTML(`<div class="receipt"><div style="text-align:center;font-size:calc(11px + 1pt);font-weight:700;">*** REPRINT ***</div>${receiptInnerHtml(sale)}</div>`, 1);
 }
 
+function fmtNum(n){ const v = Math.round((+n||0)*100)/100; return Number.isInteger(v) ? String(v) : v.toFixed(2); }
+/* one product line on a printed day report: name, quantity, and the total value sold */
+function productLineHtml(name, qty, value){
+  return `<div class="rline"><span style="flex:1;">${esc(name)}</span><span style="min-width:2.8em; text-align:right;">x${qty}</span><span style="min-width:5.2em; text-align:right;">${value==null ? "" : fmtNum(value)}</span></div>`;
+}
+
 function openCloseDayModal(){
   const todaySales = state.db.sales.filter(s=>s.cashierId===state.currentUser.id && s.date===todayStr());
   const total = todaySales.reduce((s,x)=>s+x.total,0);
   const cash = todaySales.filter(s=>s.payment==="cash").reduce((s,x)=>s+x.total,0);
   const card = todaySales.filter(s=>s.payment==="card").reduce((s,x)=>s+x.total,0);
-  const byProduct = {};
+  const byProduct = {}, byProductValue = {};
   todaySales.forEach(s=>s.items.forEach(it=>{
     byProduct[it.name] = (byProduct[it.name]||0) + it.qty;
+    byProductValue[it.name] = (byProductValue[it.name]||0) + it.price * it.qty;
   }));
   const couponsUsed = todaySales.filter(s=>s.couponCode && s.discountAmt>0)
     .map(s=>({ code:s.couponCode, percent:s.discountPercent, discountAmt:s.discountAmt }));
@@ -1880,7 +1887,7 @@ function openCloseDayModal(){
     <div class="rline"><span>Cash</span><span>${money(cash)}</span></div>
     <div class="rline"><span>Card</span><span>${money(card)}</span></div>
     <hr/>
-    ${Object.entries(byProduct).map(([n,q])=>`<div class="rline"><span>${n}</span><span>x${q}</span></div>`).join("")}
+    ${Object.entries(byProduct).map(([n,q])=>productLineHtml(n, q, byProductValue[n])).join("")}
     ${couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${couponsUsed.length}</span></div>${couponsUsed.map(c=>`<div class="rline"><span>&nbsp;&nbsp;${c.code} (${c.percent}%)</span><span>−${money(c.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(couponsDiscountTotal)}</span></div>` : ""}
     <hr/>
     <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>`;
@@ -1908,7 +1915,7 @@ function openCloseDayModal(){
       date: todayStr(),
       totalSales: total,
       transactionCount: todaySales.length,
-      breakdown: { cash, card, byProduct, couponsUsed, couponsDiscountTotal },
+      breakdown: { cash, card, byProduct, byProductValue, couponsUsed, couponsDiscountTotal },
       closedAt: nowIso()
     };
     state.db.dayCloses.push(report);
@@ -2228,7 +2235,7 @@ function dailyReportFor(date, closes){
   state.db.sales.filter(s=>s.date===date).forEach(s=>{
     const k = s.cashierId || s.cashierName;
     const c = per[k] = per[k] || { key:k, name:s.cashierName, start:s.timestamp, transactionCount:0, cash:0, card:0, total:0,
-                                    couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, closedAt:null };
+                                    couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, byProductValue:{}, closedAt:null };
     if(s.timestamp < c.start) c.start = s.timestamp;
     c.transactionCount++; c.total += s.total || 0;
     if(s.payment==="cash") c.cash += s.total || 0;
@@ -2237,7 +2244,10 @@ function dailyReportFor(date, closes){
       c.couponsUsed.push({ code:s.couponCode, percent:s.discountPercent, discountAmt:s.discountAmt });
       c.couponsDiscountTotal += s.discountAmt;
     }
-    (s.items||[]).forEach(i=>{ c.byProduct[i.name] = (c.byProduct[i.name]||0) + i.qty; });
+    (s.items||[]).forEach(i=>{
+      c.byProduct[i.name] = (c.byProduct[i.name]||0) + i.qty;
+      c.byProductValue[i.name] = (c.byProductValue[i.name]||0) + i.price * i.qty;
+    });
   });
   // a cashier who closed but has no sales that day (e.g. a 0-transaction close) still appears, from their closing
   const latest = {};
@@ -2251,15 +2261,16 @@ function dailyReportFor(date, closes){
     const b = c.breakdown || {};
     per[k] = { key:k, name:c.cashierName, start:c.closedAt, transactionCount:c.transactionCount||0, cash:b.cash||0, card:b.card||0,
                total:c.totalSales||0, couponsUsed:b.couponsUsed||[], couponsDiscountTotal:b.couponsDiscountTotal||0,
-               byProduct:{ ...(b.byProduct||{}) }, closedAt:c.closedAt };
+               byProduct:{ ...(b.byProduct||{}) }, byProductValue:{ ...(b.byProductValue||{}) }, closedAt:c.closedAt };
   });
   const rows = Object.values(per).sort((a,b)=>String(a.start).localeCompare(String(b.start)));
   const r = { date, rows, cashiers: rows.map(x=>x.name), transactionCount:0, cash:0, card:0, total:0,
-              couponsUsed:[], couponsDiscountTotal:0, byProduct:{} };
+              couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, byProductValue:{} };
   rows.forEach(c=>{
     r.transactionCount += c.transactionCount; r.cash += c.cash; r.card += c.card; r.total += c.total;
     r.couponsUsed = r.couponsUsed.concat(c.couponsUsed); r.couponsDiscountTotal += c.couponsDiscountTotal;
     Object.entries(c.byProduct).forEach(([n,q])=>{ r.byProduct[n] = (r.byProduct[n]||0) + q; });
+    Object.entries(c.byProductValue).forEach(([n,v])=>{ r.byProductValue[n] = (r.byProductValue[n]||0) + v; });
   });
   return r;
 }
@@ -2280,7 +2291,7 @@ function printDailyReport(r){
     <div class="rline"><span>Cash</span><span>${money(r.cash)}</span></div>
     <div class="rline"><span>Card</span><span>${money(r.card)}</span></div>
     <hr/>
-    ${Object.entries(r.byProduct).map(([n,q])=>`<div class="rline"><span>${esc(n)}</span><span>x${q}</span></div>`).join("")}
+    ${Object.entries(r.byProduct).map(([n,q])=>productLineHtml(n, q, r.byProductValue[n])).join("")}
     ${r.couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${r.couponsUsed.length}</span></div>${r.couponsUsed.map(cu=>`<div class="rline"><span>&nbsp;&nbsp;${esc(cu.code)} (${cu.percent}%)</span><span>−${money(cu.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(r.couponsDiscountTotal)}</span></div>` : ""}
     <hr/>
     <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(r.total)}</span></div>`;
@@ -2397,7 +2408,7 @@ function exportDayClosesExcel(){
       Date: fmtDate(r.date), Cashier: c.name, Started: fmtDateTime(c.start).slice(11),
       Transactions: c.transactionCount, Cash: c.cash, Card: c.card, Total: c.total
     }));
-    Object.entries(r.byProduct).sort((a,b)=>b[1]-a[1]).forEach(([name,qty])=>perProduct.push({ Date: fmtDate(r.date), Product: name, Qty: qty }));
+    Object.entries(r.byProduct).sort((a,b)=>b[1]-a[1]).forEach(([name,qty])=>perProduct.push({ Date: fmtDate(r.date), Product: name, Qty: qty, Value: r.byProductValue[name] }));
   });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(daily), "Day Reports");
