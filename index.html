@@ -394,7 +394,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-01",
+  APP_VERSION: "2026-11-02",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -804,13 +804,48 @@ async function connectDrive(){
   // a missing database file (404) is fine here — it is created next.
 }
 
+/* ---- reading the database file (works for any size; GitHub's normal file API stops at 1 MB) ---- */
+function parseDbText(text){
+  let obj;
+  try{ obj = JSON.parse(text); }catch(e){ throw new Error("The database file on GitHub is not valid JSON"); }
+  if(!obj || typeof obj !== "object" || !obj.meta || !Array.isArray(obj.sales)) throw new Error("The database file on GitHub is not in the expected format");
+  return obj;
+}
+async function ghTooLarge(res){
+  if(res.status !== 403) return false;
+  try{ const b = await res.clone().json(); return (b.errors||[]).some(e=>e.code==="too_large"); }catch(e){ return false; }
+}
+/* the file's version id, taken from the repository's file list (that listing works for any file size) */
+async function ghFileSha(){
+  const res = await fetch(ghApiUrl().replace(/\/[^\/]+$/, ""), { headers: authHeaders() });
+  if(!res.ok) throw new Error("GitHub read failed: "+res.status);
+  const list = await res.json();
+  const f = Array.isArray(list) ? list.find(x=>x.name===CONFIG.DB_FILENAME) : null;
+  if(!f) throw new Error("GitHub read failed: 404");
+  return f.sha;
+}
+/* files over 1 MB: read them as a Git blob (up to 100 MB); the raw file is the fallback */
+async function readLargeFile(sha){
+  const blob = await fetch(`https://api.github.com/repos/${CONFIG.GITHUB_OWNER}/${CONFIG.GITHUB_REPO}/git/blobs/${sha}`, { headers: authHeaders() });
+  if(blob.ok){
+    const b = await blob.json();
+    if(b.content) return parseDbText(base64ToUtf8(b.content));
+  }
+  const raw = await fetch(ghApiUrl(), { headers: { ...authHeaders(), "Accept": "application/vnd.github.v3.raw" } });
+  if(!raw.ok) throw new Error("GitHub read failed: "+raw.status);
+  return parseDbText(await raw.text());
+}
+
 async function driveFindDbFile(){
   const res = await fetch(ghApiUrl(), { headers: authHeaders() });
   if(res.status === 404) return null;
-  if(!res.ok) throw new Error("GitHub read failed: "+res.status);
-  const data = await res.json();
-  state.fileSha = data.sha;
-  return { id: CONFIG.DB_FILENAME };
+  if(res.ok){
+    const data = await res.json();
+    state.fileSha = data.sha;
+    return { id: CONFIG.DB_FILENAME };
+  }
+  if(await ghTooLarge(res)){ state.fileSha = await ghFileSha(); return { id: CONFIG.DB_FILENAME }; }
+  throw new Error("GitHub read failed: "+res.status);
 }
 
 async function driveCreateDbFile(dbObj){
@@ -831,14 +866,18 @@ async function driveCreateDbFile(dbObj){
 
 async function driveReadFile(fileId){
   const res = await fetch(ghApiUrl(), { headers: authHeaders() });
-  if(!res.ok) throw new Error("GitHub read failed: "+res.status);
-  const data = await res.json();
-  state.fileSha = data.sha;
-  if(data.content && data.encoding === "base64") return JSON.parse(base64ToUtf8(data.content));
-  // GitHub sends no content for files over 1 MB — the raw file has to be requested separately
-  const raw = await fetch(ghApiUrl(), { headers: { ...authHeaders(), "Accept": "application/vnd.github.raw+json" } });
-  if(!raw.ok) throw new Error("GitHub read failed: "+raw.status);
-  return JSON.parse(await raw.text());
+  if(res.ok){
+    const data = await res.json();
+    state.fileSha = data.sha;
+    if(data.content && data.encoding === "base64") return parseDbText(base64ToUtf8(data.content));
+    return await readLargeFile(data.sha);
+  }
+  if(await ghTooLarge(res)){
+    const sha = await ghFileSha();
+    state.fileSha = sha;
+    return await readLargeFile(sha);
+  }
+  throw new Error("GitHub read failed: "+res.status);
 }
 
 async function driveWriteFile(fileId, dbObj){
@@ -881,7 +920,8 @@ function mergeDb(local, remote){
   if(!remote) return local;
   if(!local) return remote;
   const merged = { meta: null, users: [], products: [], categories: [], coupons: [], staff: [], staffUsage: [], invItems: [], invMoves: [], sales: [], dayCloses: [] };
-  merged.meta = (new Date(remote.meta.updatedAt) > new Date(local.meta.updatedAt)) ? remote.meta : local.meta;
+  const rm = remote.meta || {}, lm = local.meta || {};
+  merged.meta = (new Date(rm.updatedAt || 0) > new Date(lm.updatedAt || 0)) ? rm : lm;
 
   function mergeById(a, b){
     const map = {};
@@ -1039,7 +1079,7 @@ function showSyncProblem(){
   if(/\b401\b/.test(msg)){ text = "GitHub no longer accepts this device's access token. It has probably expired or was deleted. Create a new token and connect again — the sales saved on this device are kept and will be uploaded."; needsToken = true; }
   else if(/\b403\b/.test(msg)){ text = "GitHub refused the request. The token may be missing the Contents read & write permission, or too many requests were made. Check the token's permissions, or wait a few minutes."; needsToken = true; }
   else if(/\b404\b/.test(msg)){ text = "The data repository or database file was not found. Check that the repository name and the token's repository access are correct."; }
-  else if(/JSON|Unexpected/i.test(msg)){ text = "The database file on GitHub could not be read. Update the app to the newest version and try again."; }
+  else if(/JSON|Unexpected|expected format/i.test(msg)){ text = "The database file on GitHub could not be read or is not in the expected format. Don't edit it by hand. Update the app to the newest version and try again; if it still fails, send the technical detail below to the developer."; }
   else { text = "The app could not reach GitHub. Check the internet connection and try again."; }
   const bg = document.createElement("div");
   bg.className = "modal-bg";
