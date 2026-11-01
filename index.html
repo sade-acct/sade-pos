@@ -394,7 +394,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-10-15",
+  APP_VERSION: "2026-11-01",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -437,6 +437,7 @@ const state = {
   supTab: "menu",
   anRange: null,
   lastSyncAt: null,
+  syncError: null,
   numpadTarget: null   // null (locked), {kind:"product", id, name, isDrink}, or {kind:"coupon"}
 };
 
@@ -818,7 +819,7 @@ async function driveCreateDbFile(dbObj){
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({
       message: "Initialize Sade POS database",
-      content: utf8ToBase64(JSON.stringify(dbObj, null, 2))
+      content: utf8ToBase64(JSON.stringify(dbObj))
     })
   });
   if(res.status === 403 || res.status === 404) throw new Error(`GitHub won't let this token create the database file (${res.status}). On the token, set Contents to Read and write for ${CONFIG.GITHUB_REPO}`);
@@ -833,7 +834,11 @@ async function driveReadFile(fileId){
   if(!res.ok) throw new Error("GitHub read failed: "+res.status);
   const data = await res.json();
   state.fileSha = data.sha;
-  return JSON.parse(base64ToUtf8(data.content));
+  if(data.content && data.encoding === "base64") return JSON.parse(base64ToUtf8(data.content));
+  // GitHub sends no content for files over 1 MB — the raw file has to be requested separately
+  const raw = await fetch(ghApiUrl(), { headers: { ...authHeaders(), "Accept": "application/vnd.github.raw+json" } });
+  if(!raw.ok) throw new Error("GitHub read failed: "+raw.status);
+  return JSON.parse(await raw.text());
 }
 
 async function driveWriteFile(fileId, dbObj){
@@ -842,7 +847,7 @@ async function driveWriteFile(fileId, dbObj){
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({
       message: "Update Sade POS data",
-      content: utf8ToBase64(JSON.stringify(dbObj, null, 2)),
+      content: utf8ToBase64(JSON.stringify(dbObj)),
       sha: state.fileSha
     })
   });
@@ -857,7 +862,7 @@ async function driveWriteFile(fileId, dbObj){
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({
         message: "Update Sade POS data (merged)",
-        content: utf8ToBase64(JSON.stringify(state.db, null, 2)),
+        content: utf8ToBase64(JSON.stringify(state.db)),
         sha: state.fileSha
       })
     });
@@ -913,12 +918,13 @@ async function pullFromDrive(silent){
     const remote = await driveReadFile(state.dbFileId);
     state.db = migrateDb(mergeDb(state.db, remote));
     state.lastSyncAt = nowIso();
+    state.syncError = null;
     applyTheme();
     saveLocalCache();
     autoBackup();
     if(!silent) render();
     else renderIfLive();
-  }catch(e){ console.warn("pull failed", e); }
+  }catch(e){ console.warn("pull failed", e); state.syncError = String((e && e.message) || e); renderIfLive(); }
 }
 
 let pendingSave = null;
@@ -939,9 +945,11 @@ async function pushToDrive(){
       await driveWriteFile(state.dbFileId, state.db);
       state.offlinePending = false;
       state.lastSyncAt = nowIso();
+      state.syncError = null;
     }catch(e){
       console.warn("save failed", e);
       state.offlinePending = true;
+      state.syncError = String((e && e.message) || e);
     }finally{
       state.saving = false;
       renderIfLive();
@@ -963,6 +971,7 @@ async function flushOffline(){
     await driveWriteFile(state.dbFileId, state.db);
     state.offlinePending = false;
     state.lastSyncAt = nowIso();
+    state.syncError = null;
     saveLocalCache();
     applyTheme();
     startSyncLoop();
@@ -970,6 +979,7 @@ async function flushOffline(){
     render();
   }catch(e){
     console.warn("flush failed", e);
+    state.syncError = String((e && e.message) || e);
     if(String(e.message||"").match(/40[13]/)){
       // the token no longer works (revoked/expired) — clear it so the
       // person is prompted to paste a fresh one, rather than retrying forever
@@ -1003,21 +1013,64 @@ function syncPillHtml(){
   }
   let cls, label, tip = "";
   if(!navigator.onLine){ cls = "offline"; label = "Offline — saved on this device"; }
+  else if(state.syncError){ cls = "offline"; label = "Can't sync — tap for details"; tip = state.syncError; }
   else if(state.offlinePending){ cls = "warn"; label = "Waiting to sync — tap to retry"; }
   else if(state.saving){ cls = "warn"; label = "Syncing…"; }
   else { cls = "live"; label = "Synced"; tip = state.lastSyncAt ? "Last sync " + fmtDateTime(state.lastSyncAt).slice(11) : ""; }
-  return `<span class="pill" id="syncPill" style="cursor:pointer;" title="${tip}"><span class="dot ${cls}"></span>${label}</span>`;
+  return `<span class="pill" id="syncPill" style="cursor:pointer;" title="${esc(tip)}"><span class="dot ${cls}"></span>${label}</span>`;
 }
 function wireSyncPill(){
   const pill = document.getElementById("syncPill");
   if(!pill) return;
   if(!state.accessToken){
     pill.onclick = ()=>{ state.view = "connect"; render(); };
+  } else if(state.syncError){
+    pill.onclick = showSyncProblem;
   } else if(state.offlinePending){
     pill.onclick = ()=> flushOffline();
   } else {
-    pill.onclick = async ()=>{ await pullFromDrive(true); toast("Checked — everything is up to date", "ok"); };
+    pill.onclick = async ()=>{ await pullFromDrive(true); toast(state.syncError ? "Can't sync — tap the light for details" : "Checked — everything is up to date", state.syncError ? "err" : "ok"); };
   }
+}
+/* explains in plain words why this device can't sync, and what to do */
+function showSyncProblem(){
+  const msg = String(state.syncError || "");
+  let text, needsToken = false;
+  if(/\b401\b/.test(msg)){ text = "GitHub no longer accepts this device's access token. It has probably expired or was deleted. Create a new token and connect again — the sales saved on this device are kept and will be uploaded."; needsToken = true; }
+  else if(/\b403\b/.test(msg)){ text = "GitHub refused the request. The token may be missing the Contents read & write permission, or too many requests were made. Check the token's permissions, or wait a few minutes."; needsToken = true; }
+  else if(/\b404\b/.test(msg)){ text = "The data repository or database file was not found. Check that the repository name and the token's repository access are correct."; }
+  else if(/JSON|Unexpected/i.test(msg)){ text = "The database file on GitHub could not be read. Update the app to the newest version and try again."; }
+  else { text = "The app could not reach GitHub. Check the internet connection and try again."; }
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>Can't sync</h3>
+      <p style="font-size:13.5px; line-height:1.5; margin-bottom:10px;">${esc(text)}</p>
+      <p style="font-size:11.5px; color:var(--crema-dim); margin-bottom:6px;">Technical detail: ${esc(msg)}</p>
+      <p style="font-size:12px; color:var(--crema-dim);">Everything sold on this device is still saved here. Don't clear the browser data or remove the app until it has synced.</p>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="spClose">Close</button>
+        ${needsToken ? `<button class="btn btn-outline" id="spToken">Enter new token</button>` : ""}
+        <button class="btn btn-primary" id="spRetry">Try again</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#spClose").onclick = ()=>bg.remove();
+  bg.querySelector("#spRetry").onclick = async ()=>{
+    bg.remove();
+    state.syncError = null;
+    if(state.offlinePending) await flushOffline(); else await pullFromDrive(true);
+    toast(state.syncError ? "Still can't sync" : "Synced", state.syncError ? "err" : "ok");
+    renderIfLive();
+  };
+  if(needsToken) bg.querySelector("#spToken").onclick = ()=>{
+    bg.remove();
+    clearSavedToken();
+    state.accessToken = null;
+    state.view = "connect";
+    render();
+  };
 }
 
 window.addEventListener("online", ()=>{ if(state.dbFileId) flushOffline(); });
@@ -1177,7 +1230,8 @@ async function handleConnect(){
       await pushToDrive();
     } else {
       state.dbFileId = file.id;
-      state.db = migrateDb(await driveReadFile(file.id));
+      const remoteDb = await driveReadFile(file.id);
+      state.db = migrateDb(state.db ? mergeDb(state.db, remoteDb) : remoteDb);   // keep sales not yet uploaded from this device
       if(!state.db.users || state.db.users.length===0){
         await seedDefaultDbUsers(state.db);
       }
