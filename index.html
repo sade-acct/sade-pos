@@ -104,6 +104,8 @@
   .dot.live{background:var(--ok); box-shadow:0 0 0 0 rgba(122,154,108,.6); animation:pulse 2s infinite;}
   .dot.offline{background:var(--err);}
   .dot.warn{background:#f5a623;}
+  .stat-wide{grid-column:span 2;}
+  @media (max-width:520px){ .stat-wide{grid-column:auto;} }
   .product-btn.soldout{opacity:.5; position:relative;}
   .soldout-tag{position:absolute; top:6px; right:6px; background:var(--err); color:#fff; font-size:9.5px; font-weight:700; padding:2px 6px; border-radius:10px;}
   .inv-row{display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 0; border-bottom:1px solid var(--line);}
@@ -394,7 +396,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-02",
+  APP_VERSION: "2026-11-04",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -438,6 +440,8 @@ const state = {
   anRange: null,
   lastSyncAt: null,
   syncError: null,
+  shiftId: null,
+  shRange: null,
   numpadTarget: null   // null (locked), {kind:"product", id, name, isDrink}, or {kind:"coupon"}
 };
 
@@ -526,6 +530,7 @@ function defaultDb(){
     staffUsage: [],
     invItems: [],
     invMoves: [],
+    shifts: [],
     sales: [],
     dayCloses: []
   };
@@ -576,7 +581,8 @@ function migrateDb(db){
   ["live","reports","menu","categories","coupons","team"].forEach(k=>{
     if(db.meta.adminTabs[k]===undefined) db.meta.adminTabs[k] = true;
   });
-  if(db.meta.adminTabs.analytics===undefined) db.meta.adminTabs.analytics = false;   // sales reports: off for admins until the developer turns them on
+  if(db.meta.adminTabs.analytics===undefined) db.meta.adminTabs.analytics = false;
+  if(db.meta.adminTabs.shifts===undefined) db.meta.adminTabs.shifts = true;     // admins see Shifts unless the developer switches it off   // sales reports: off for admins until the developer turns them on
   if(db.meta.printCopies===undefined) db.meta.printCopies = 1;
   if(db.meta.receiptHeader===undefined) db.meta.receiptHeader = "";
   if(!db.meta.receiptFooter) db.meta.receiptFooter = "Thank you!";
@@ -597,6 +603,7 @@ function migrateDb(db){
   db.staffUsage = db.staffUsage || [];
   db.invItems = db.invItems || [];
   db.invMoves = db.invMoves || [];
+  db.shifts = db.shifts || [];
   db.users = db.users || [];
   db.products = db.products || [];
   db.coupons = db.coupons || [];
@@ -919,7 +926,7 @@ async function driveWriteFile(fileId, dbObj){
 function mergeDb(local, remote){
   if(!remote) return local;
   if(!local) return remote;
-  const merged = { meta: null, users: [], products: [], categories: [], coupons: [], staff: [], staffUsage: [], invItems: [], invMoves: [], sales: [], dayCloses: [] };
+  const merged = { meta: null, users: [], products: [], categories: [], coupons: [], staff: [], staffUsage: [], invItems: [], invMoves: [], shifts: [], sales: [], dayCloses: [] };
   const rm = remote.meta || {}, lm = local.meta || {};
   merged.meta = (new Date(rm.updatedAt || 0) > new Date(lm.updatedAt || 0)) ? rm : lm;
 
@@ -939,6 +946,7 @@ function mergeDb(local, remote){
   merged.coupons = mergeById(local.coupons, remote.coupons);
   merged.staff = mergeById(local.staff, remote.staff);
   merged.invItems = mergeById(local.invItems, remote.invItems);
+  merged.shifts = mergeById(local.shifts, remote.shifts);
 
   function unionById(a,b){
     const map = {};
@@ -969,6 +977,10 @@ async function pullFromDrive(silent){
 
 let pendingSave = null;
 async function pushToDrive(){
+  if(state.shiftId){
+    const sh = (state.db.shifts||[]).find(x=>x.id===state.shiftId);
+    if(sh && !sh.logoutAt){ sh.lastSeenAt = nowIso(); sh.updatedAt = sh.lastSeenAt; }
+  }
   const fp = metaFp(state.db.meta);
   if(state.db.meta._fp === undefined){ state.db.meta._fp = fp; }
   else if(state.db.meta._fp !== fp){ state.db.meta._fp = fp; state.db.meta.updatedAt = nowIso(); }
@@ -1389,6 +1401,7 @@ function renderLoginScreen(el){
       return;
     }
     state.currentUser = { id:user.id, username:user.username, role:user.role, name:user.name };
+    startShift(state.currentUser);
     state.cart = [];
     state.appliedCoupon = null;
     state.view = user.role;
@@ -1422,6 +1435,7 @@ function renderShell(el, contentFn){
   `;
   el.appendChild(shell);
   $("#logoutLink").onclick = ()=>{
+    endShift(false); pushToDrive();
     state.currentUser = null; state.cart = []; state.appliedCoupon = null; state.staffMember = null;
     state.view = "login"; render();
   };
@@ -1976,6 +1990,7 @@ function openCloseDayModal(){
   const reportRows = `
     <div class="rline"><span>Cashier</span><span>${state.currentUser.name||state.currentUser.username}</span></div>
     <div class="rline"><span>Date</span><span>${fmtDate(todayStr())}</span></div>
+    ${closeReportShiftRows()}
     <hr/>
     <div class="rline"><span>Transactions</span><span>${todaySales.length}</span></div>
     <div class="rline"><span>Cash</span><span>${money(cash)}</span></div>
@@ -2012,6 +2027,7 @@ function openCloseDayModal(){
       breakdown: { cash, card, byProduct, byProductValue, couponsUsed, couponsDiscountTotal },
       closedAt: nowIso()
     };
+    endShift(true);
     state.db.dayCloses.push(report);
     state.db.dayCloses = dedupeDayCloses(state.db.dayCloses);
     await pushToDrive();
@@ -2249,7 +2265,7 @@ function renderSupervisorView(el){
 /* ================= ADMIN VIEW (read-only) ================= */
 function renderAdminView(el){
   const at = state.db.meta.adminTabs || {};
-  const allTabs = [["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["inventory","Inventory" + invBadge()],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]];
+  const allTabs = [["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["shifts","Shifts"],["inventory","Inventory" + invBadge()],["menu","Menu"],["categories","Categories"],["coupons","Coupons"],["team","Team"]];
   const visibleTabs = allTabs.filter(([key])=> at[key]!==false && (key!=="inventory" || (state.db.meta.inventoryEnabled && state.db.meta.inventoryAdmin!==false)));
   if(visibleTabs.length===0){
     el.innerHTML = `<div class="empty-state"><div class="big">🙈</div><p>The developer hasn't made any dashboard sections visible yet.</p></div>`;
@@ -2279,6 +2295,7 @@ function renderAdminView(el){
   if(state.adminTab==="team") return renderTeamList(body, false);
   if(state.adminTab==="analytics") return renderAnalyticsPanel(body, false);
   if(state.adminTab==="inventory") return renderInventoryPanel(body, "admin");
+  if(state.adminTab==="shifts") return renderShiftsPanel(body);
 }
 
 function statsForToday(){
@@ -2300,6 +2317,7 @@ function renderLiveSales(el, editable){
       <div class="stat"><div class="label">Card sales today</div><div class="value">${money(card)}</div></div>
       <div class="stat"><div class="label">Transactions</div><div class="value">${count}</div></div>
       <div class="stat"><div class="label">Active cashiers today</div><div class="value">${activeCashiers}</div></div>
+      ${canSeeShifts() ? shiftsStatHtml() : ""}
       <div class="stat"><div class="label">Coupons used today</div><div class="value">${couponsUsedToday.length}</div></div>
       <div class="stat"><div class="label">System status</div><div class="value" style="font-size:16px; color:${state.db.meta.appActive?'var(--ok)':'var(--err)'};">${state.db.meta.appActive?'Active':'Deactivated'}</div></div>
     </div>
@@ -2375,7 +2393,8 @@ function buildDailyReports(){
 }
 
 function printDailyReport(r){
-  const perCashier = r.rows.map(c=>`<div class="rline"><span>${esc(c.name)} (${c.transactionCount})</span><span>${money(c.total)}</span></div>`).join("");
+  const shiftTx = canSeeShifts() ? shiftTextsByUser(r.date) : {};
+  const perCashier = r.rows.map(c=>`<div class="rline"><span>${esc(c.name)} (${c.transactionCount})</span><span>${money(c.total)}</span></div>${shiftTx[c.key] ? `<div class="rsub">${esc(shiftTx[c.key].text)}</div>` : ""}`).join("");
   const rows = `
     <div class="rline"><span>Date</span><span>${fmtDate(r.date)}</span></div>
     <div class="rline"><span>Cashiers</span><span>${r.rows.length}</span></div>
@@ -2406,7 +2425,7 @@ function renderReportsList(el, editable){
           ${days.map(r=>`
             <tr>
               <td class="mono">${fmtDate(r.date)}</td>
-              <td>${r.cashiers.map(esc).join(", ")}</td>
+              <td>${cashiersCellHtml(r)}</td>
               <td>${r.transactionCount}</td>
               <td>${money(r.cash)}</td>
               <td>${money(r.card)}</td>
@@ -2498,10 +2517,17 @@ function exportDayClosesExcel(){
   }));
   const perCashier = [], perProduct = [];
   days.forEach(r=>{
-    r.rows.forEach(c=>perCashier.push({
-      Date: fmtDate(r.date), Cashier: c.name, Started: fmtDateTime(c.start).slice(11),
-      Transactions: c.transactionCount, Cash: c.cash, Card: c.card, Total: c.total
-    }));
+    const shiftTx = canSeeShifts() ? shiftTextsByUser(r.date) : {};
+    r.rows.forEach(c=>{
+      const row = { Date: fmtDate(r.date), Cashier: c.name, Started: fmtDateTime(c.start).slice(11) };
+      if(canSeeShifts()){
+        const t = shiftTx[c.key];
+        row["Log-in / Log-out"] = t ? t.parts.join(", ") : "";
+        row["Hours worked"] = t ? Math.round(t.ms/36000)/100 : "";
+      }
+      Object.assign(row, { Transactions: c.transactionCount, Cash: c.cash, Card: c.card, Total: c.total });
+      perCashier.push(row);
+    });
     Object.entries(r.byProduct).sort((a,b)=>b[1]-a[1]).forEach(([name,qty])=>perProduct.push({ Date: fmtDate(r.date), Product: name, Qty: qty, Value: r.byProductValue[name] }));
   });
   const wb = XLSX.utils.book_new();
@@ -3058,18 +3084,19 @@ function openCouponModal(coupon){
 function renderTeamList(el, editable){
   const visibleUsers = activeUsers().filter(u=>u.role!=="developer");
   el.innerHTML = `<div class="card"><h3 style="margin-bottom:12px; font-size:15px;">Team (${editable?"editable":"view only"})</h3>
-    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th>${editable?"<th></th>":""}</tr></thead>
+    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th>${canSeeShifts()?"<th>Last signed in</th>":""}${editable?"<th></th>":""}</tr></thead>
     <tbody id="teamBody"></tbody></table>
     ${editable?`<button class="btn btn-primary" id="addUserBtn" style="margin-top:14px;">${isSup() ? "Add " + roleLabel('cashier') : "Add cashier / admin"}</button>`:""}
     </div>`;
   const body = $("#teamBody");
   if(visibleUsers.length===0){
-    body.innerHTML = `<tr><td colspan="${editable?5:4}" style="text-align:center; color:var(--crema-dim); padding:24px;">No cashiers or admins yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${4 + (editable?1:0) + (canSeeShifts()?1:0)}" style="text-align:center; color:var(--crema-dim); padding:24px;">No cashiers or admins yet.</td></tr>`;
   }
   visibleUsers.forEach(u=>{
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${u.name}</td><td class="mono">${u.username}</td><td>${roleLabel(u.role)}</td>
       <td style="color:${u.active===false?'var(--err)':'var(--ok)'};">${u.active===false?"Disabled":"Active"}</td>
+      ${canSeeShifts() ? `<td class="mono" style="font-size:12px;">${u.role==="cashier" ? lastSignIn(u.id) : "—"}</td>` : ""}
       ${editable?`<td>${(!isSup() || u.role==="cashier") ? `<a class="link" data-uid="${u.id}">Edit</a>` : ""}</td>`:""}`;
     body.appendChild(tr);
   });
@@ -3219,7 +3246,7 @@ function renderSettingsPanel(el){
       <button class="btn btn-primary btn-block" id="saveSettingsBtn">Save settings</button>
     </div>`;
 
-  const adminTabLabels = { live:"Live sales", reports:"Day reports", analytics:"Sales reports (by product, hour, cashier, payment)", menu:"Menu", categories:"Categories", coupons:"Coupons", team:"Team" };
+  const adminTabLabels = { live:"Live sales", reports:"Day reports", analytics:"Sales reports (by product, hour, cashier, payment)", shifts:"Shifts (cashier log-in & log-out times)", menu:"Menu", categories:"Categories", coupons:"Coupons", team:"Team" };
   const adminTabsDraft = { ...(m.adminTabs||{}) };
   const checklist = $("#adminTabsChecklist");
   Object.keys(adminTabLabels).forEach(key=>{
@@ -3684,6 +3711,184 @@ function openCashierStockModal(){
   draw();
 }
 
+/* ================= SHIFTS (cashier log-in / log-out times) =================
+   A shift record starts when a cashier signs in and ends when they sign out or close the day.
+   If nobody signs out (browser closed, computer switched off) the end is ESTIMATED from the last
+   sign of life: the last sale or the last save from that device. Shifts belong to the day (UTC date)
+   they started, the same way sales do. */
+function fmtTime(iso){ return fmtDateTime(iso).slice(11); }
+function fmtHours(ms){
+  const m = Math.round(ms/60000), h = Math.floor(m/60);
+  return h ? h + "h " + String(m%60).padStart(2,"0") + "m" : m + "m";
+}
+function canSeeShifts(){
+  const u = state.currentUser;
+  if(!u) return false;
+  if(u.role==="developer") return true;
+  if(u.role==="admin") return (state.db.meta.adminTabs || {}).shifts !== false;
+  return false;
+}
+function startShift(user){
+  if(!user || user.role!=="cashier") return;
+  const now = nowIso();
+  const rec = { id: uid(), userId: user.id, userName: user.name || user.username, date: now.slice(0,10),
+                loginAt: now, logoutAt: null, lastSeenAt: now, updatedAt: now };
+  state.db.shifts.push(rec);
+  state.shiftId = rec.id;
+  pushToDrive();
+}
+function endShift(closedDay){
+  const sh = state.shiftId && state.db.shifts.find(x=>x.id===state.shiftId);
+  if(sh && !sh.logoutAt){
+    sh.logoutAt = nowIso(); sh.lastSeenAt = sh.logoutAt; sh.updatedAt = sh.logoutAt;
+    if(closedDay) sh.closedDay = true;
+  }
+  state.shiftId = null;
+}
+function shiftSalesIndex(){
+  const idx = {};
+  state.db.sales.forEach(x=>{
+    if(!x.cashierId) return;
+    (idx[x.cashierId] = idx[x.cashierId] || []).push({ t: new Date(x.timestamp).getTime(), total: x.total || 0 });
+  });
+  return idx;
+}
+/* adds the end time, hours, sales count and sales total to each shift */
+function computeShifts(list, nowMs){
+  nowMs = nowMs || Date.now();
+  const today = new Date(nowMs).toISOString().slice(0,10);   // a shift with no sign-out stays "in now" for the rest of its day
+  const idx = shiftSalesIndex(), all = state.db.shifts;
+  return list.slice().sort((a,b)=>String(a.loginAt).localeCompare(String(b.loginAt))).map(sh=>{
+    const login = new Date(sh.loginAt).getTime();
+    const next = all.filter(x=>x.userId===sh.userId && x.id!==sh.id && new Date(x.loginAt).getTime() > login)
+                    .reduce((m,x)=>Math.min(m, new Date(x.loginAt).getTime()), Infinity);
+    const sales = (idx[sh.userId] || []).filter(x=>x.t >= login && x.t < next);
+    let endMs, live = false, estimated = false;
+    if(sh.logoutAt){ endMs = new Date(sh.logoutAt).getTime(); }
+    else {
+      let last = Math.max(login, new Date(sh.lastSeenAt || sh.loginAt).getTime());
+      sales.forEach(x=>{ if(x.t > last) last = x.t; });
+      if(next === Infinity && sh.date === today){ live = true; endMs = nowMs; }
+      else { endMs = Math.min(last, next); estimated = true; }
+    }
+    const inShift = sales.filter(x=>x.t <= endMs + 1000);
+    return { sh, loginMs: login, endMs, live, estimated, ms: Math.max(0, endMs - login),
+             n: inShift.length, total: inShift.reduce((t,x)=>t+x.total, 0) };
+  });
+}
+function shiftOutText(c){
+  if(c.live) return "in now";
+  return (c.estimated ? "~" : "") + fmtTime(new Date(c.endMs).toISOString());
+}
+function shiftRangeText(c){ return fmtTime(c.sh.loginAt) + "–" + (c.live ? "now" : shiftOutText(c)); }
+/* userId -> { parts:["08:55–17:10"], ms, text:"08:55–17:10 · 8h 15m" } for one day */
+function shiftTextsByUser(date){
+  const out = {};
+  computeShifts(state.db.shifts.filter(x=>x.date===date)).forEach(c=>{
+    const o = out[c.sh.userId] = out[c.sh.userId] || { parts:[], ms:0 };
+    o.parts.push(shiftRangeText(c)); o.ms += c.ms;
+  });
+  Object.values(out).forEach(o=>{ o.text = o.parts.join(", ") + " · " + fmtHours(o.ms); });
+  return out;
+}
+/* lines for the cashier's printed close-day report (signing out happens at the same moment) */
+function closeReportShiftRows(){
+  const u = state.currentUser;
+  if(!u) return "";
+  const date = todayStr(), now = Date.now();
+  const list = state.db.shifts.filter(x=>x.userId===u.id && x.date===date)
+                              .sort((a,b)=>String(a.loginAt).localeCompare(String(b.loginAt)));
+  if(!list.length) return "";
+  let ms = 0;
+  computeShifts(list, now).forEach(c=>{ ms += (c.sh.id===state.shiftId) ? Math.max(0, now - c.loginMs) : c.ms; });
+  return `<div class="rline"><span>Signed in</span><span>${fmtTime(list[0].loginAt)}</span></div>
+    <div class="rline"><span>Signed out</span><span>${fmtTime(new Date(now).toISOString())}</span></div>
+    <div class="rline"><span>Hours worked</span><span>${fmtHours(ms)}</span></div>`;
+}
+function lastSignIn(userId){
+  const l = state.db.shifts.filter(x=>x.userId===userId).map(x=>x.loginAt).sort();
+  return l.length ? fmtDateTime(l[l.length-1]) : "—";
+}
+function cashiersCellHtml(r){
+  const st = canSeeShifts() ? shiftTextsByUser(r.date) : {};
+  if(!r.rows.some(c=>st[c.key])) return r.cashiers.map(esc).join(", ");
+  return r.rows.map(c=>esc(c.name) + (st[c.key] ? ` <span class="inv-sub">${esc(st[c.key].text)}</span>` : "")).join("<br>");
+}
+/* Live sales: the "cashiers on shift today" box */
+function shiftsStatHtml(){
+  const list = computeShifts(state.db.shifts.filter(x=>x.date===todayStr()));
+  const rows = list.map(c=>`<div style="display:flex; justify-content:space-between; gap:10px;"><span>${esc(c.sh.userName)}</span><span class="mono" style="${c.live ? "color:var(--ok);" : ""}">${fmtTime(c.sh.loginAt)} → ${shiftOutText(c)}</span></div>`).join("");
+  return `<div class="stat stat-wide"><div class="label">Cashiers on shift today</div><div style="font-size:12.5px; line-height:1.7; margin-top:6px;">${rows || '<span style="color:var(--crema-dim);">No sign-ins yet</span>'}</div></div>`;
+}
+
+/* the Shifts tab */
+function renderShiftsPanel(el){
+  const st = state.shRange || (state.shRange = { preset:"today", from:todayStr(), to:todayStr() });
+  const [from, to] = analyticsRange(st);
+  const list = computeShifts(state.db.shifts.filter(x=>x.date>=from && x.date<=to));
+  const multiDay = from !== to;
+  const byUser = {};
+  list.forEach(c=>{
+    const o = byUser[c.sh.userName] = byUser[c.sh.userName] || { shifts:0, ms:0, n:0, total:0 };
+    o.shifts++; o.ms += c.ms; o.n += c.n; o.total += c.total;
+  });
+  el.innerHTML = `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        <h3 style="font-size:15px;">Shifts — cashier log-in &amp; log-out times</h3>
+        <button class="btn btn-outline" id="shExport">⬇️ Export to Excel</button>
+      </div>
+      <div class="inline-row" style="margin-bottom:12px;">
+        <div class="field"><label>Period</label>
+          <select id="shPreset">
+            ${[["today","Today"],["yesterday","Yesterday"],["week","Last 7 days"],["month","This month"],["custom","Choose dates"]].map(([v,l])=>`<option value="${v}" ${st.preset===v?"selected":""}>${l}</option>`).join("")}
+          </select>
+        </div>
+        ${st.preset==="custom" ? `
+          <div class="field"><label>From</label><input type="date" id="shFrom" value="${st.from}" /></div>
+          <div class="field"><label>To</label><input type="date" id="shTo" value="${st.to}" /></div>` : ""}
+      </div>
+      <div style="font-size:12px; color:var(--crema-dim); margin:-4px 0 12px;">${fmtDate(from)}${multiDay ? " – " + fmtDate(to) : ""} · “~” means nobody signed out, so the end time is the last activity.</div>
+      <table>
+        <thead><tr>${multiDay ? "<th>Date</th>" : ""}<th>Cashier</th><th>Log-in</th><th>Log-out</th><th>Hours</th><th>Sales</th><th style="text-align:right;">Total</th></tr></thead>
+        <tbody>
+          ${list.map(c=>`<tr>${multiDay ? `<td class="mono">${fmtDate(c.sh.date)}</td>` : ""}
+            <td>${esc(c.sh.userName)}</td>
+            <td class="mono">${fmtTime(c.sh.loginAt)}</td>
+            <td class="mono" style="${c.live ? "color:var(--ok); font-weight:600;" : ""}">${c.live ? "In now" : shiftOutText(c)}</td>
+            <td>${fmtHours(c.ms)}</td>
+            <td>${c.n}</td>
+            <td style="text-align:right;">${money(c.total)}</td></tr>`).join("") ||
+            `<tr><td colspan="${multiDay?7:6}" style="text-align:center; color:var(--crema-dim); padding:24px;">No sign-ins in this period.</td></tr>`}
+        </tbody>
+      </table>
+      ${list.length && Object.keys(byUser).length ? `
+      <h4 style="font-size:13px; margin:18px 0 6px;">Hours by cashier</h4>
+      <table><thead><tr><th>Cashier</th><th>Shifts</th><th>Hours worked</th><th>Sales</th><th style="text-align:right;">Total</th></tr></thead><tbody>
+        ${Object.entries(byUser).map(([name,o])=>`<tr><td>${esc(name)}</td><td>${o.shifts}</td><td>${fmtHours(o.ms)}</td><td>${o.n}</td><td style="text-align:right;">${money(o.total)}</td></tr>`).join("")}
+      </tbody></table>` : ""}
+    </div>`;
+  $("#shPreset").onchange = e=>{ st.preset = e.target.value; render(); };
+  if(st.preset==="custom"){
+    $("#shFrom").onchange = e=>{ st.from = e.target.value || todayStr(); render(); };
+    $("#shTo").onchange = e=>{ st.to = e.target.value || todayStr(); render(); };
+  }
+  $("#shExport").onclick = ()=>{
+    if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
+    const iso = ms => new Date(ms).toISOString();
+    const rows = list.map(c=>({
+      Date: fmtDate(c.sh.date), Cashier: c.sh.userName, "Log-in": fmtDateTime(c.sh.loginAt),
+      "Log-out": c.live ? "In now" : fmtDateTime(iso(c.endMs)) + (c.estimated ? " (estimated)" : ""),
+      "Hours worked": Math.round(c.ms/36000)/100, Sales: c.n, Total: c.total
+    }));
+    const per = Object.entries(byUser).map(([name,o])=>({ Cashier:name, Shifts:o.shifts, "Hours worked": Math.round(o.ms/36000)/100, Sales:o.n, Total:o.total }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Shifts");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(per), "Hours by cashier");
+    XLSX.writeFile(wb, "sade-shifts-" + from + (from===to ? "" : "_to_" + to) + ".xlsx");
+  };
+}
+
 /* ================= STAFF ALLOWANCE =================
    Developer sets, per person, how many free (or discounted) drinks and foods they get per
    day / week / month. Cashiers never see the remaining numbers — the allowance is simply
@@ -3931,7 +4136,7 @@ function renderDeveloperView(el){
 
   const tabs = document.createElement("div");
   tabs.className = "tabs";
-  [["products","Menu buttons"],["categories","Categories"],["coupons","Coupons"],["settings","Settings"],["staff","Staff"],["team",`${roleLabel('cashier')}s & ${roleLabel('admin')}s`],["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["inventory","Inventory" + invBadge()]].forEach(([key,label])=>{
+  [["products","Menu buttons"],["categories","Categories"],["coupons","Coupons"],["settings","Settings"],["staff","Staff"],["team",`${roleLabel('cashier')}s & ${roleLabel('admin')}s`],["live","Live sales"],["reports","Day reports"],["analytics","Sales reports"],["shifts","Shifts"],["inventory","Inventory" + invBadge()]].forEach(([key,label])=>{
     const t = document.createElement("div");
     t.className = "tab" + (state.devTab===key ? " active":"");
     t.textContent = label;
@@ -3955,6 +4160,7 @@ function renderDeveloperView(el){
   if(state.devTab==="settings"){ renderSettingsPanel(body); appendBackupCard(body); return; }
   if(state.devTab==="analytics") return renderAnalyticsPanel(body, true);
   if(state.devTab==="inventory") return renderInventoryPanel(body, "developer");
+  if(state.devTab==="shifts") return renderShiftsPanel(body);
   if(state.devTab==="staff") return renderStaffPanel(body);
   if(state.devTab==="team") return renderTeamList(body, true);
   if(state.devTab==="live") return renderLiveSales(body, true);
