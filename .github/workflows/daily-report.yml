@@ -74,7 +74,7 @@ jobs:
           const per = {};
           sales.forEach(s => {
             const k = s.cashierId || s.cashierName;
-            const c = (per[k] = per[k] || { name: s.cashierName, start: s.timestamp, n: 0, cash: 0, card: 0, total: 0 });
+            const c = (per[k] = per[k] || { key: k, name: s.cashierName, start: s.timestamp, n: 0, cash: 0, card: 0, total: 0 });
             if (s.timestamp < c.start) c.start = s.timestamp;
             c.n++; c.total += s.total || 0;
             if (s.payment === "cash") c.cash += s.total || 0;
@@ -88,9 +88,33 @@ jobs:
           Object.keys(latest).forEach(k => {
             if (per[k]) return;                       // cashier with a close but no sales that day (e.g. 0 transactions)
             const c = latest[k], b = c.breakdown || {};
-            per[k] = { name: c.cashierName, start: c.closedAt, n: c.transactionCount || 0, cash: b.cash || 0, card: b.card || 0, total: c.totalSales || 0 };
+            per[k] = { key: k, name: c.cashierName, start: c.closedAt, n: c.transactionCount || 0, cash: b.cash || 0, card: b.card || 0, total: c.totalSales || 0 };
           });
           const cashiers = Object.values(per).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+
+          // log-in / log-out times (shifts). If nobody signed out, the end is the last activity and is marked with ~
+          const allShifts = db.shifts || [];
+          const shiftByUser = {};
+          allShifts.filter(x => x.date === date).sort((a, b) => String(a.loginAt).localeCompare(String(b.loginAt))).forEach(sh => {
+            const login = Date.parse(sh.loginAt);
+            const next = allShifts.filter(x => x.userId === sh.userId && x.id !== sh.id && Date.parse(x.loginAt) > login)
+              .reduce((m, x) => Math.min(m, Date.parse(x.loginAt)), Infinity);
+            let end, est = false;
+            if (sh.logoutAt) end = Date.parse(sh.logoutAt);
+            else {
+              let last = Math.max(login, Date.parse(sh.lastSeenAt || sh.loginAt));
+              sales.forEach(s => {
+                if ((s.cashierId || s.cashierName) !== sh.userId) return;
+                const t = Date.parse(s.timestamp);
+                if (t >= login && t < next && t > last) last = t;
+              });
+              end = Math.min(last, next); est = true;
+            }
+            const o = (shiftByUser[sh.userId] = shiftByUser[sh.userId] || { parts: [], ms: 0 });
+            o.parts.push(timeOf(sh.loginAt) + "–" + (est ? "~" : "") + timeOf(new Date(end).toISOString()));
+            o.ms += Math.max(0, end - login);
+          });
+          const hoursText = ms => { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? h + "h " + String(m % 60).padStart(2, "0") + "m" : m + "m"; };
 
           if (sales.length === 0 && cashiers.length === 0) {
             console.log("No sales on " + date + ". Nothing to send.");
@@ -122,6 +146,15 @@ jobs:
           });
           const hours = Object.keys(byHour).map(Number).sort((a, b) => a - b);
 
+          // add-on options (radio / checkbox choices) picked on the items
+          const byOption = {};
+          sales.forEach(s => (s.items || []).forEach(i => (i.options || []).forEach(o => (o.choices || []).forEach(c => {
+            const key = (o.title || "") + "|" + c.label;
+            const x = (byOption[key] = byOption[key] || { group: o.title || "", label: c.label, qty: 0, rev: 0 });
+            x.qty += i.qty; x.rev += (c.price || 0) * i.qty;
+          }))));
+          const optionRows = Object.values(byOption).sort((a, b) => b.qty - a.qty);
+
           // ---- HTML email ----
           const th = "text-align:left;padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;color:#666;";
           const td = "padding:6px 8px;border-bottom:1px solid #eee;font-size:14px;";
@@ -145,8 +178,8 @@ jobs:
             stat("Total sales", money(total)) + stat("Transactions", n) + stat("Cash", money(cash)) + stat("Card", money(card)) +
             "</tr></table>" +
             h2("Cashiers (in the order they started)") +
-            table(["Cashier", "Started", "Transactions", "Cash", "Card", "Total"],
-              cashiers.map(c => [esc(c.name), timeOf(c.start), c.n, money(c.cash), money(c.card), money(c.total)]), 2) +
+            table(["Cashier", "Log-in – log-out", "Hours", "Transactions", "Cash", "Card", "Total"],
+              cashiers.map(c => { const sh = shiftByUser[c.key]; return [esc(c.name), sh ? sh.parts.join(", ") : "—", sh ? hoursText(sh.ms) : "—", c.n, money(c.cash), money(c.card), money(c.total)]; }), 3) +
             (coupons.length || staffDisc
               ? h2("Discounts") + table(["Type", "Amount"], [
                   ...(coupons.length ? [["Coupons used (" + coupons.length + ")", "−" + money(couponTotal)]] : []),
@@ -157,6 +190,10 @@ jobs:
               hours.map(h => [String(h).padStart(2, "0") + ":00", byHour[h].n, money(byHour[h].rev)]), 1) +
             h2("Sales by product") + table(["Product", "Qty", "Sales", "Share"],
               products.map(p => [esc(p.name), p.qty, money(p.rev), pct(p.rev, prodRev)]), 1) +
+            (optionRows.length
+              ? h2("Add-on options") + table(["Option", "Choice", "Qty", "Extra sales"],
+                  optionRows.map(o => [esc(o.group), esc(o.label), o.qty, o.rev > 0 ? money(o.rev) : "—"]), 2)
+              : "") +
             '<div style="color:#999;font-size:11px;margin-top:20px;">Sent automatically. Change or switch off the address in the developer dashboard (Day reports).</div>' +
             "</div>";
 
@@ -188,6 +225,8 @@ jobs:
             html
           });
           console.log("Report for " + date + " sent to " + recipients.join(", "));
+
+
 
           REPORT_SCRIPT_EOF
       - name: Send the report
