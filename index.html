@@ -353,6 +353,21 @@
       display:block; position:absolute; top:0; left:0; width:100%;
       background:#fff; color:#000; padding:0;
     }
+    /* A4 report printing (Sales reports tab): only the report is laid out, in light colours, over as many pages as needed */
+    @page report{ size:A4; margin:12mm; }
+    body.printing-report > *:not(#printArea){ display:none !important; }
+    body.printing-report #printArea{ position:static; }
+    #printArea .report-print{
+      page:report; font-size:12px; color:#1b1b1b;
+      --paper:#1b1b1b; --crema:#444; --crema-dim:#666; --line:#d0d0d0; --espresso:#fff; --espresso-2:#fff;
+    }
+    #printArea .report-print, #printArea .report-print *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    #printArea .report-print .card{ box-shadow:none !important; border:none !important; padding:0 !important; background:#fff !important; }
+    #printArea .report-print table{ width:100%; border-collapse:collapse; }
+    #printArea .report-print thead{ display:table-header-group; }
+    #printArea .report-print tr, #printArea .report-print .an-stat{ break-inside:avoid; page-break-inside:avoid; }
+    #printArea .report-print h3, #printArea .report-print h4{ break-after:avoid; page-break-after:avoid; }
+    #printArea .report-print .an-sec{ margin-bottom:14px; }
   }
 
   /* ---------- landscape-only on phones ----------
@@ -396,7 +411,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-04",
+  APP_VERSION: "2026-11-05",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -736,7 +751,7 @@ function roleLabel(key){
    separated by page breaks) rather than calling window.print() repeatedly,
    which would stack multiple dialogs. Only sale receipts pass a copies
    count; printed reports stay at a single copy. */
-function printHTML(innerHtml, copies){
+function printHTML(innerHtml, copies, mode){
   copies = Math.max(1, copies || 1);
   let area = document.getElementById("printArea");
   if(!area){
@@ -746,6 +761,11 @@ function printHTML(innerHtml, copies){
   }
   area.innerHTML = Array.from({length:copies}, ()=>innerHtml)
     .join('<div style="page-break-after:always; height:0;"></div>');
+  if(mode === "report"){
+    document.body.classList.add("printing-report");
+    const done = ()=>{ document.body.classList.remove("printing-report"); window.removeEventListener("afterprint", done); };
+    window.addEventListener("afterprint", done);
+  }
   window.print();
 }
 
@@ -2111,9 +2131,12 @@ function renderAnalyticsPanel(el, isDev){
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
         <h3 style="font-size:15px;">Sales reports</h3>
-        <button class="btn btn-outline" id="anExport">⬇️ Export to Excel</button>
+        <div class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-outline" id="anPrint">🖨️ Print / Save as PDF</button>
+          <button class="btn btn-outline" id="anExport">⬇️ Export to Excel</button>
+        </div>
       </div>
-      <div class="inline-row" style="margin-bottom:16px;">
+      <div class="inline-row no-print" style="margin-bottom:16px;">
         <div class="field"><label>Period</label>
           <select id="anPreset">
             ${[["today","Today"],["yesterday","Yesterday"],["week","Last 7 days"],["month","This month"],["custom","Choose dates"]].map(([v,l])=>`<option value="${v}" ${st.preset===v?"selected":""}>${l}</option>`).join("")}
@@ -2182,6 +2205,15 @@ function renderAnalyticsPanel(el, isDev){
     $("#anFrom").onchange = e=>{ st.from = e.target.value || todayStr(); render(); };
     $("#anTo").onchange = e=>{ st.to = e.target.value || todayStr(); render(); };
   }
+  $("#anPrint").onclick = ()=>{
+    const card = el.querySelector(".card").cloneNode(true);
+    card.querySelectorAll(".no-print").forEach(x=>x.remove());
+    const mm = state.db.meta;
+    const head = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid #ccc;">
+      <div style="display:flex; align-items:center;">${mm.logoDataUrl ? `<img src="${mm.logoDataUrl}" style="max-height:34px; margin-right:10px;"/>` : ""}<div style="font-size:16px; font-weight:700;">${esc(mm.businessName || "Sade POS")}</div></div>
+      <div style="font-size:11px; color:#555;">Printed ${fmtDateTime(nowIso())}</div></div>`;
+    printHTML(`<div class="report-print">${head}${card.outerHTML}</div>`, 1, "report");
+  };
   $("#anExport").onclick = ()=>{
     if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
     const rows = [], blank = ()=>rows.push([]);
