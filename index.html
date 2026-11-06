@@ -411,7 +411,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-05",
+  APP_VERSION: "2026-11-06",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -1994,6 +1994,29 @@ function productLineHtml(name, qty, value){
   return `<div class="rline"><span style="flex:1;">${esc(name)}</span><span style="min-width:2.8em; text-align:right;">x${qty}</span><span style="min-width:5.2em; text-align:right;">${value==null ? "" : fmtNum(value)}</span></div>`;
 }
 
+/* bottom partition of the close-day report: everyone who signed in today, added together */
+function allCashiersTodayRows(){
+  const date = todayStr();
+  const sales = state.db.sales.filter(x=>x.date===date).sort((a,b)=>String(a.timestamp).localeCompare(String(b.timestamp)));
+  const names = [];
+  state.db.shifts.filter(x=>x.date===date).sort((a,b)=>String(a.loginAt).localeCompare(String(b.loginAt)))
+    .forEach(x=>{ if(!names.includes(x.userName)) names.push(x.userName); });
+  sales.forEach(x=>{ if(!names.includes(x.cashierName)) names.push(x.cashierName); });
+  let cash = 0, card = 0, total = 0;
+  sales.forEach(x=>{
+    total += x.total || 0;
+    if(x.payment==="cash") cash += x.total || 0;
+    else if(x.payment==="card") card += x.total || 0;
+  });
+  return `<hr/>
+    <div class="rline" style="font-weight:700;"><span>ALL CASHIERS TODAY</span><span>${names.length}</span></div>
+    ${names.map(n=>`<div class="rsub">${esc(n)}</div>`).join("")}
+    <div class="rline"><span>Transactions</span><span>${sales.length}</span></div>
+    <div class="rline"><span>Cash</span><span>${money(cash)}</span></div>
+    <div class="rline"><span>Card</span><span>${money(card)}</span></div>
+    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>`;
+}
+
 function openCloseDayModal(){
   const todaySales = state.db.sales.filter(s=>s.cashierId===state.currentUser.id && s.date===todayStr());
   const total = todaySales.reduce((s,x)=>s+x.total,0);
@@ -2019,7 +2042,8 @@ function openCloseDayModal(){
     ${Object.entries(byProduct).map(([n,q])=>productLineHtml(n, q, byProductValue[n])).join("")}
     ${couponsUsed.length ? `<hr/><div class="rline"><span>Coupons used</span><span>${couponsUsed.length}</span></div>${couponsUsed.map(c=>`<div class="rline"><span>&nbsp;&nbsp;${c.code} (${c.percent}%)</span><span>−${money(c.discountAmt)}</span></div>`).join("")}<div class="rline"><span>Total discount given</span><span>−${money(couponsDiscountTotal)}</span></div>` : ""}
     <hr/>
-    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>`;
+    <div class="rline" style="font-weight:700;"><span>TOTAL</span><span>${money(total)}</span></div>
+    ${allCashiersTodayRows()}`;
   const bg = document.createElement("div");
   bg.className = "modal-bg";
   bg.innerHTML = `
