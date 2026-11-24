@@ -411,7 +411,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-06",
+  APP_VERSION: "2026-11-23",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -577,6 +577,30 @@ function dedupeDayCloses(list){
 /* A device only claims "my settings are the newest" when its settings really changed.
    (Before, every sale bumped the settings timestamp, so a cashier device could overwrite a
    switch the developer had just changed — e.g. the Staff on/off switch.) */
+/* ---- cashier names: the same characters in capitals or small letters are ONE person ---- */
+function nameKey(n){ return String(n==null?"":n).trim().replace(/\s+/g," ").replace(/[İı]/g,"i").toLowerCase(); }
+/* Reports group people by name key, and show the latest form of the name (the most recently edited user record).
+   Sales made before a user was renamed still count for them, because sales are matched by user id first. */
+function cashierResolver(){
+  const byId = {}, disp = {}, stamp = {}, seen = {};
+  (state.db.users||[]).forEach(u=>{ byId[u.id] = u; });
+  Object.values(byId).forEach(u=>{
+    const raw = u.name || u.username; if(!raw) return;
+    const k = nameKey(raw), t = String(u.updatedAt || u.createdAt || "");
+    if(!(k in stamp) || t >= stamp[k]){ stamp[k] = t; disp[k] = raw; }
+  });
+  return {
+    key(id, name, ts){
+      const u = id && byId[id];
+      const raw = u ? (u.name || u.username) : name;
+      const k = nameKey(raw);
+      if(!(k in disp)){ const t = String(ts||""); if(!seen[k] || t >= seen[k].ts) seen[k] = { ts:t, name:raw }; }
+      return k;
+    },
+    name(k){ return disp[k] || (seen[k] && seen[k].name) || k; }
+  };
+}
+
 function metaFp(m){ const c = { ...m }; delete c.updatedAt; delete c._fp; return JSON.stringify(c); }
 
 function migrateDb(db){
@@ -1998,10 +2022,11 @@ function productLineHtml(name, qty, value){
 function allCashiersTodayRows(){
   const date = todayStr();
   const sales = state.db.sales.filter(x=>x.date===date).sort((a,b)=>String(a.timestamp).localeCompare(String(b.timestamp)));
-  const names = [];
+  const names = [], keys = [], res = cashierResolver();
   state.db.shifts.filter(x=>x.date===date).sort((a,b)=>String(a.loginAt).localeCompare(String(b.loginAt)))
-    .forEach(x=>{ if(!names.includes(x.userName)) names.push(x.userName); });
-  sales.forEach(x=>{ if(!names.includes(x.cashierName)) names.push(x.cashierName); });
+    .forEach(x=>{ const k = res.key(x.userId, x.userName, x.loginAt); if(!keys.includes(k)) keys.push(k); });
+  sales.forEach(x=>{ const k = res.key(x.cashierId, x.cashierName, x.timestamp); if(!keys.includes(k)) keys.push(k); });
+  keys.forEach(k=>names.push(res.name(k)));
   let cash = 0, card = 0, total = 0;
   sales.forEach(x=>{
     total += x.total || 0;
@@ -2097,6 +2122,7 @@ function analyticsRange(st){
 function computeAnalytics(from, to){
   const sales = state.db.sales.filter(s=>s.date>=from && s.date<=to);
   const out = { sales, revenue:0, discounts:0, byProduct:{}, byOption:{}, byHour:{}, byCashier:{}, byPay:{} };
+  const res = cashierResolver();
   sales.forEach(s=>{
     out.revenue += s.total || 0;
     out.discounts += (s.discountAmt||0) + (s.staffDiscountAmt||0);
@@ -2112,12 +2138,16 @@ function computeAnalytics(from, to){
     const h = new Date(s.timestamp).getHours();
     const hh = out.byHour[h] = out.byHour[h] || { n:0, rev:0 };
     hh.n++; hh.rev += s.total || 0;
-    const c = out.byCashier[s.cashierName] = out.byCashier[s.cashierName] || { n:0, rev:0 };
+    const ck = res.key(s.cashierId, s.cashierName, s.timestamp);
+    const c = out.byCashier[ck] = out.byCashier[ck] || { n:0, rev:0 };
     c.n++; c.rev += s.total || 0;
     const pm = s.payment || "other";
     const pp = out.byPay[pm] = out.byPay[pm] || { n:0, rev:0 };
     pp.n++; pp.rev += s.total || 0;
   });
+  const named = {};
+  Object.keys(out.byCashier).forEach(k=>{ named[res.name(k)] = out.byCashier[k]; });
+  out.byCashier = named;
   return out;
 }
 function staffUsageRows(from, to){
@@ -2364,7 +2394,8 @@ function statsForToday(){
 
 function renderLiveSales(el, editable){
   const {count, total, cash, card, sales} = statsForToday();
-  const activeCashiers = new Set(sales.map(s=>s.cashierName)).size;
+  const _res = cashierResolver();
+  const activeCashiers = new Set(sales.map(s=>_res.key(s.cashierId, s.cashierName, s.timestamp))).size;
   const couponsUsedToday = sales.filter(s=>s.couponCode && s.discountAmt>0);
   el.innerHTML = `
     <div class="stat-grid">
@@ -2385,7 +2416,7 @@ function renderLiveSales(el, editable){
           ${sales.slice().reverse().slice(0,40).map(s=>`
             <tr>
               <td class="mono">${new Date(s.timestamp).toLocaleTimeString()}</td>
-              <td>${s.cashierName}</td>
+              <td>${esc(_res.name(_res.key(s.cashierId, s.cashierName, s.timestamp)))}</td>
               <td>${s.items.map(i=>i.qty+"× "+esc(i.name)+optSummaryHtml(i)).join(", ")}</td>
               <td style="text-transform:capitalize;">${s.payment}</td>
               <td class="mono">${s.couponCode && s.discountAmt>0 ? `${s.couponCode} (−${money(s.discountAmt)})` : "—"}</td>
@@ -2399,9 +2430,9 @@ function renderLiveSales(el, editable){
 /* One report per day. It is built from ALL sales of that date, so every cashier is included — even one
    who did not press "Close day". Cashiers are listed in the order they started (first sale of the day). */
 function dailyReportFor(date, closes){
-  const per = {};
+  const per = {}, res = cashierResolver();
   state.db.sales.filter(s=>s.date===date).forEach(s=>{
-    const k = s.cashierId || s.cashierName;
+    const k = res.key(s.cashierId, s.cashierName, s.timestamp);
     const c = per[k] = per[k] || { key:k, name:s.cashierName, start:s.timestamp, transactionCount:0, cash:0, card:0, total:0,
                                     couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, byProductValue:{}, closedAt:null };
     if(s.timestamp < c.start) c.start = s.timestamp;
@@ -2420,7 +2451,7 @@ function dailyReportFor(date, closes){
   // a cashier who closed but has no sales that day (e.g. a 0-transaction close) still appears, from their closing
   const latest = {};
   closes.forEach(c=>{
-    const k = c.cashierId || c.cashierName;
+    const k = res.key(c.cashierId, c.cashierName, c.closedAt);
     if(!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
   });
   Object.keys(latest).forEach(k=>{
@@ -2431,6 +2462,7 @@ function dailyReportFor(date, closes){
                total:c.totalSales||0, couponsUsed:b.couponsUsed||[], couponsDiscountTotal:b.couponsDiscountTotal||0,
                byProduct:{ ...(b.byProduct||{}) }, byProductValue:{ ...(b.byProductValue||{}) }, closedAt:c.closedAt };
   });
+  Object.values(per).forEach(x=>{ x.name = res.name(x.key); });
   const rows = Object.values(per).sort((a,b)=>String(a.start).localeCompare(String(b.start)));
   const r = { date, rows, cashiers: rows.map(x=>x.name), transactionCount:0, cash:0, card:0, total:0,
               couponsUsed:[], couponsDiscountTotal:0, byProduct:{}, byProductValue:{} };
@@ -2609,14 +2641,16 @@ function exportMonthlyExcel(monthValue){
     byProduct[it.name]["Qty Sold"] += it.qty;
     byProduct[it.name].Revenue += it.price*it.qty;
   }));
+  const _res = cashierResolver();
+  const cashName = s => _res.name(_res.key(s.cashierId, s.cashierName, s.timestamp));
   const salesRows = monthSales.map(s=>({
-    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:s.cashierName,
+    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:cashName(s),
     Items: s.items.map(i=>i.qty+"x "+i.name).join(", "), Subtotal:s.subtotal,
     Coupon: s.discountAmt>0 ? s.couponCode : "", Discount:s.discountAmt||0,
     Total:s.total, Payment:s.payment
   }));
   const couponRows = monthSales.filter(s=>s.discountAmt>0 && s.couponCode).map(s=>({
-    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:s.cashierName,
+    Date:s.date, Time:new Date(s.timestamp).toLocaleTimeString(), Cashier:cashName(s),
     Code:s.couponCode, Percent:s.discountPercent, "Discount Given":s.discountAmt
   }));
   const wb = XLSX.utils.book_new();
@@ -3196,6 +3230,8 @@ function openUserModal(user){
     const role = isSup() ? "cashier" : $("#ufRole").value;
     const pass = $("#ufPass").value;
     if(!name || !username){ toast("Name and username are required","err"); return; }
+    const clash = activeUsers().find(u=>u.id !== (user && user.id) && nameKey(u.name || u.username) === nameKey(name));
+    if(clash){ toast(`A user named "${clash.name || clash.username}" already exists`,"err"); return; }
     if(isNew){
       if(activeUsers().some(u=>u.username.toLowerCase()===username.toLowerCase())){
         toast("Username already exists","err"); return;
@@ -3839,9 +3875,10 @@ function shiftOutText(c){
 function shiftRangeText(c){ return fmtTime(c.sh.loginAt) + "–" + (c.live ? "now" : shiftOutText(c)); }
 /* userId -> { parts:["08:55–17:10"], ms, text:"08:55–17:10 · 8h 15m" } for one day */
 function shiftTextsByUser(date){
-  const out = {};
+  const out = {}, res = cashierResolver();
   computeShifts(state.db.shifts.filter(x=>x.date===date)).forEach(c=>{
-    const o = out[c.sh.userId] = out[c.sh.userId] || { parts:[], ms:0 };
+    const uk = res.key(c.sh.userId, c.sh.userName, c.sh.loginAt);
+    const o = out[uk] = out[uk] || { parts:[], ms:0 };
     o.parts.push(shiftRangeText(c)); o.ms += c.ms;
   });
   Object.values(out).forEach(o=>{ o.text = o.parts.join(", ") + " · " + fmtHours(o.ms); });
@@ -3872,8 +3909,9 @@ function cashiersCellHtml(r){
 }
 /* Live sales: the "cashiers on shift today" box */
 function shiftsStatHtml(){
+  const res = cashierResolver();
   const list = computeShifts(state.db.shifts.filter(x=>x.date===todayStr()));
-  const rows = list.map(c=>`<div style="display:flex; justify-content:space-between; gap:10px;"><span>${esc(c.sh.userName)}</span><span class="mono" style="${c.live ? "color:var(--ok);" : ""}">${fmtTime(c.sh.loginAt)} → ${shiftOutText(c)}</span></div>`).join("");
+  const rows = list.map(c=>`<div style="display:flex; justify-content:space-between; gap:10px;"><span>${esc(res.name(res.key(c.sh.userId, c.sh.userName, c.sh.loginAt)))}</span><span class="mono" style="${c.live ? "color:var(--ok);" : ""}">${fmtTime(c.sh.loginAt)} → ${shiftOutText(c)}</span></div>`).join("");
   return `<div class="stat stat-wide"><div class="label">Cashiers on shift today</div><div style="font-size:12.5px; line-height:1.7; margin-top:6px;">${rows || '<span style="color:var(--crema-dim);">No sign-ins yet</span>'}</div></div>`;
 }
 
@@ -3883,9 +3921,11 @@ function renderShiftsPanel(el){
   const [from, to] = analyticsRange(st);
   const list = computeShifts(state.db.shifts.filter(x=>x.date>=from && x.date<=to));
   const multiDay = from !== to;
+  const res = cashierResolver();
+  const nm = c => res.name(res.key(c.sh.userId, c.sh.userName, c.sh.loginAt));
   const byUser = {};
   list.forEach(c=>{
-    const o = byUser[c.sh.userName] = byUser[c.sh.userName] || { shifts:0, ms:0, n:0, total:0 };
+    const o = byUser[nm(c)] = byUser[nm(c)] || { shifts:0, ms:0, n:0, total:0 };
     o.shifts++; o.ms += c.ms; o.n += c.n; o.total += c.total;
   });
   el.innerHTML = `
@@ -3909,7 +3949,7 @@ function renderShiftsPanel(el){
         <thead><tr>${multiDay ? "<th>Date</th>" : ""}<th>Cashier</th><th>Log-in</th><th>Log-out</th><th>Hours</th><th>Sales</th><th style="text-align:right;">Total</th></tr></thead>
         <tbody>
           ${list.map(c=>`<tr>${multiDay ? `<td class="mono">${fmtDate(c.sh.date)}</td>` : ""}
-            <td>${esc(c.sh.userName)}</td>
+            <td>${esc(nm(c))}</td>
             <td class="mono">${fmtTime(c.sh.loginAt)}</td>
             <td class="mono" style="${c.live ? "color:var(--ok); font-weight:600;" : ""}">${c.live ? "In now" : shiftOutText(c)}</td>
             <td>${fmtHours(c.ms)}</td>
@@ -3933,7 +3973,7 @@ function renderShiftsPanel(el){
     if(!window.XLSX){ toast("Excel library still loading, try again in a moment","err"); return; }
     const iso = ms => new Date(ms).toISOString();
     const rows = list.map(c=>({
-      Date: fmtDate(c.sh.date), Cashier: c.sh.userName, "Log-in": fmtDateTime(c.sh.loginAt),
+      Date: fmtDate(c.sh.date), Cashier: nm(c), "Log-in": fmtDateTime(c.sh.loginAt),
       "Log-out": c.live ? "In now" : fmtDateTime(iso(c.endMs)) + (c.estimated ? " (estimated)" : ""),
       "Hours worked": Math.round(c.ms/36000)/100, Sales: c.n, Total: c.total
     }));
