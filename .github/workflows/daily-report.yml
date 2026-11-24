@@ -71,9 +71,27 @@ jobs:
           // ---- one combined report for the date (same rules as the app's Day reports tab) ----
           const sales = (db.sales || []).filter(s => s.date === date);
           const closes = (db.dayCloses || []).filter(c => c.date === date);
+          // the same name in capitals or small letters is one person; the latest edited form of the name is shown
+          const nameKey = n => String(n == null ? "" : n).trim().replace(/\s+/g, " ").replace(/[İı]/g, "i").toLowerCase();
+          const userById = {}, disp = {}, stamp = {}, seen = {};
+          (db.users || []).forEach(u => { userById[u.id] = u; });
+          Object.values(userById).forEach(u => {
+            const raw = u.name || u.username; if (!raw) return;
+            const k = nameKey(raw), t = String(u.updatedAt || u.createdAt || "");
+            if (!(k in stamp) || t >= stamp[k]) { stamp[k] = t; disp[k] = raw; }
+          });
+          const keyOf = (id, name, ts) => {
+            const u = id && userById[id];
+            const raw = u ? (u.name || u.username) : name;
+            const k = nameKey(raw);
+            if (!(k in disp)) { const t = String(ts || ""); if (!seen[k] || t >= seen[k].ts) seen[k] = { ts: t, name: raw }; }
+            return k;
+          };
+          const nameOf = k => disp[k] || (seen[k] && seen[k].name) || k;
+
           const per = {};
           sales.forEach(s => {
-            const k = s.cashierId || s.cashierName;
+            const k = keyOf(s.cashierId, s.cashierName, s.timestamp);
             const c = (per[k] = per[k] || { key: k, name: s.cashierName, start: s.timestamp, n: 0, cash: 0, card: 0, total: 0 });
             if (s.timestamp < c.start) c.start = s.timestamp;
             c.n++; c.total += s.total || 0;
@@ -82,7 +100,7 @@ jobs:
           });
           const latest = {};
           closes.forEach(c => {
-            const k = c.cashierId || c.cashierName;
+            const k = keyOf(c.cashierId, c.cashierName, c.closedAt);
             if (!latest[k] || new Date(c.closedAt) > new Date(latest[k].closedAt)) latest[k] = c;
           });
           Object.keys(latest).forEach(k => {
@@ -90,6 +108,7 @@ jobs:
             const c = latest[k], b = c.breakdown || {};
             per[k] = { key: k, name: c.cashierName, start: c.closedAt, n: c.transactionCount || 0, cash: b.cash || 0, card: b.card || 0, total: c.totalSales || 0 };
           });
+          Object.values(per).forEach(c => { c.name = nameOf(c.key); });
           const cashiers = Object.values(per).sort((a, b) => String(a.start).localeCompare(String(b.start)));
 
           // log-in / log-out times (shifts). If nobody signed out, the end is the last activity and is marked with ~
@@ -97,20 +116,21 @@ jobs:
           const shiftByUser = {};
           allShifts.filter(x => x.date === date).sort((a, b) => String(a.loginAt).localeCompare(String(b.loginAt))).forEach(sh => {
             const login = Date.parse(sh.loginAt);
-            const next = allShifts.filter(x => x.userId === sh.userId && x.id !== sh.id && Date.parse(x.loginAt) > login)
+            const shKey = keyOf(sh.userId, sh.userName, sh.loginAt);
+            const next = allShifts.filter(x => keyOf(x.userId, x.userName, x.loginAt) === shKey && x.id !== sh.id && Date.parse(x.loginAt) > login)
               .reduce((m, x) => Math.min(m, Date.parse(x.loginAt)), Infinity);
             let end, est = false;
             if (sh.logoutAt) end = Date.parse(sh.logoutAt);
             else {
               let last = Math.max(login, Date.parse(sh.lastSeenAt || sh.loginAt));
               sales.forEach(s => {
-                if ((s.cashierId || s.cashierName) !== sh.userId) return;
+                if (keyOf(s.cashierId, s.cashierName, s.timestamp) !== shKey) return;
                 const t = Date.parse(s.timestamp);
                 if (t >= login && t < next && t > last) last = t;
               });
               end = Math.min(last, next); est = true;
             }
-            const o = (shiftByUser[sh.userId] = shiftByUser[sh.userId] || { parts: [], ms: 0 });
+            const o = (shiftByUser[shKey] = shiftByUser[shKey] || { parts: [], ms: 0 });
             o.parts.push(timeOf(sh.loginAt) + "–" + (est ? "~" : "") + timeOf(new Date(end).toISOString()));
             o.ms += Math.max(0, end - login);
           });
@@ -225,6 +245,7 @@ jobs:
             html
           });
           console.log("Report for " + date + " sent to " + recipients.join(", "));
+
 
 
 
