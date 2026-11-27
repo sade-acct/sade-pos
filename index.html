@@ -411,7 +411,7 @@ const CONFIG = {
   // address (https://<account>.github.io/...), so nothing needs editing per site.
   GITHUB_OWNER: (/\.github\.io$/i.test(location.hostname) ? location.hostname.split(".")[0] : "sade-acct"),
   GITHUB_REPO: "sade-pos-data",    // each account keeps its data in its own PRIVATE repo with this name
-  APP_VERSION: "2026-11-23",
+  APP_VERSION: "2026-11-27",
   DB_FILENAME: "sade_pos_db.json", // path of the database file inside that repo
   SYNC_INTERVAL_MS: 20000
 };
@@ -2121,8 +2121,9 @@ function analyticsRange(st){
 }
 function computeAnalytics(from, to){
   const sales = state.db.sales.filter(s=>s.date>=from && s.date<=to);
-  const out = { sales, revenue:0, discounts:0, byProduct:{}, byOption:{}, byHour:{}, byCashier:{}, byPay:{} };
+  const out = { sales, revenue:0, discounts:0, byProduct:{}, byOption:{}, byHour:{}, byDay:{}, byWeekday:{}, byMonth:{}, byCashier:{}, byPay:{} };
   const res = cashierResolver();
+  const pname = {}; (state.db.products||[]).forEach(p=>{ pname[p.id] = p.name; });
   sales.forEach(s=>{
     out.revenue += s.total || 0;
     out.discounts += (s.discountAmt||0) + (s.staffDiscountAmt||0);
@@ -2130,11 +2131,15 @@ function computeAnalytics(from, to){
       const p = out.byProduct[i.name] = out.byProduct[i.name] || { qty:0, rev:0 };
       p.qty += i.qty; p.rev += i.price * i.qty;
       (i.options||[]).forEach(o=>(o.choices||[]).forEach(c=>{
-        const key = (o.title||"") + "\u0000" + c.label;
-        const x = out.byOption[key] = out.byOption[key] || { group:o.title||"", label:c.label, qty:0, rev:0 };
+        const drink = (i.productId && pname[i.productId]) || i.name;     // the drink (product) this option group belongs to
+        const key = drink + "\u0000" + (o.title||"") + "\u0000" + c.label;
+        const x = out.byOption[key] = out.byOption[key] || { drink, group:o.title||"", label:c.label, qty:0, rev:0 };
         x.qty += i.qty; x.rev += (c.price||0) * i.qty;
       }));
     });
+    const dd = out.byDay[s.date] = out.byDay[s.date] || { n:0, cash:0, card:0, rev:0 };
+    dd.n++; dd.rev += s.total || 0;
+    if(s.payment==="cash") dd.cash += s.total || 0; else if(s.payment==="card") dd.card += s.total || 0;
     const h = new Date(s.timestamp).getHours();
     const hh = out.byHour[h] = out.byHour[h] || { n:0, rev:0 };
     hh.n++; hh.rev += s.total || 0;
@@ -2144,6 +2149,13 @@ function computeAnalytics(from, to){
     const pm = s.payment || "other";
     const pp = out.byPay[pm] = out.byPay[pm] || { n:0, rev:0 };
     pp.n++; pp.rev += s.total || 0;
+  });
+  // weekday and month totals are added up from the per-day totals ("days" = dates that had sales)
+  Object.keys(out.byDay).forEach(d=>{
+    const v = out.byDay[d], wd = new Date(d + "T00:00:00Z").getUTCDay(), mo = d.slice(0,7);
+    const w = out.byWeekday[wd] = out.byWeekday[wd] || { n:0, cash:0, card:0, rev:0, days:0 };
+    const m = out.byMonth[mo] = out.byMonth[mo] || { n:0, cash:0, card:0, rev:0, days:0 };
+    [w, m].forEach(t=>{ t.n += v.n; t.cash += v.cash; t.card += v.card; t.rev += v.rev; t.days++; });
   });
   const named = {};
   Object.keys(out.byCashier).forEach(k=>{ named[res.name(k)] = out.byCashier[k]; });
@@ -2175,7 +2187,18 @@ function renderAnalyticsPanel(el, isDev){
   const maxHour = Math.max(1, ...hList.map(h=>(a.byHour[h]||{rev:0}).rev));
   const cashiers = Object.entries(a.byCashier).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
   const pays = Object.entries(a.byPay).map(([name,v])=>({ name, ...v })).sort((x,y)=>y.rev-x.rev);
-  const options = Object.values(a.byOption).sort((x,y)=>y.qty-x.qty);
+  const options = Object.values(a.byOption).sort((x,y)=>String(x.drink).localeCompare(String(y.drink)) || y.qty-x.qty);
+  const WD = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const dayRows = Object.keys(a.byDay).sort().map(d=>({ date:d, wd:WD[new Date(d + "T00:00:00Z").getUTCDay()], ...a.byDay[d] }));
+  const wdRows = [1,2,3,4,5,6,0].map(i=>({ name:WD[i], ...(a.byWeekday[i] || { n:0, cash:0, card:0, rev:0, days:0 }) }));
+  const monthRows = Object.keys(a.byMonth).sort().map(m=>({ month:m, label: MONTHS[+m.slice(5,7)-1] + " " + m.slice(0,4), ...a.byMonth[m] }));
+  const sumOf = rows => rows.reduce((t,r)=>({ n:t.n+r.n, cash:t.cash+r.cash, card:t.card+r.card, rev:t.rev+r.rev }), { n:0, cash:0, card:0, rev:0 });
+  const wdWith = wdRows.filter(r=>r.days>0), wdAvg = r => r.rev / r.days;
+  const wdBest = wdWith.length > 1 ? wdWith.reduce((m,r)=>wdAvg(r) > wdAvg(m) ? r : m) : null;
+  const wdSlow = wdWith.length > 1 ? wdWith.reduce((m,r)=>wdAvg(r) < wdAvg(m) ? r : m) : null;
+  const R = 'style="text-align:right;"';
+  const totalRow = (label, cols, t, bold) => `<tr style="font-weight:700;"><td>${label}</td>${cols}<td>${t.n}</td><td>${money(t.cash)}</td><td>${money(t.card)}</td><td ${R}>${money(t.rev)}</td></tr>`;
   const payLabel = k => k==="cash" ? "Cash" : (k==="card" ? "Card" : k);
   const pct = (v,t)=> t>0 ? Math.round(v/t*100) + "%" : "—";
   const staffRows = isDev ? staffUsageRows(from, to) : [];
@@ -2222,6 +2245,26 @@ function renderAnalyticsPanel(el, isDev){
         <div class="an-hlabels">${hList.map(h=>`<span>${String(h).padStart(2,"0")}</span>`).join("")}</div>
       </div>
 
+      <div class="an-sec"><h4>📅 Sales by day</h4>
+        <table><thead><tr><th>Date</th><th>Day</th><th>Transactions</th><th>Cash</th><th>Card</th><th style="text-align:right;">Total</th></tr></thead><tbody>
+          ${dayRows.map(r=>`<tr><td class="mono">${fmtDate(r.date)}</td><td>${r.wd}</td><td>${r.n}</td><td>${money(r.cash)}</td><td>${money(r.card)}</td><td ${R}>${money(r.rev)}</td></tr>`).join("")}
+          ${dayRows.length > 1 ? totalRow("Total", "<td></td>", sumOf(dayRows)) : ""}
+        </tbody></table>
+      </div>
+
+      <div class="an-sec"><h4>🗓️ Sales by day of week</h4>
+        <table><thead><tr><th>Day</th><th>Days counted</th><th>Transactions</th><th>Cash</th><th>Card</th><th style="text-align:right;">Total</th><th style="text-align:right;">Average per day</th></tr></thead><tbody>
+          ${wdRows.map(r=>`<tr><td>${r.name}${wdBest && r===wdBest ? ' <span style="color:var(--ok); font-size:11px;">▲ busiest</span>' : ""}${wdSlow && r===wdSlow ? ' <span style="color:#c27c00; font-size:11px;">▼ slowest</span>' : ""}</td><td>${r.days}</td><td>${r.n}</td><td>${money(r.cash)}</td><td>${money(r.card)}</td><td ${R}>${money(r.rev)}</td><td ${R}>${r.days ? money(r.rev / r.days) : "—"}</td></tr>`).join("")}
+        </tbody></table>
+      </div>
+
+      <div class="an-sec"><h4>📆 Sales by month</h4>
+        <table><thead><tr><th>Month</th><th>Days counted</th><th>Transactions</th><th>Cash</th><th>Card</th><th style="text-align:right;">Total</th></tr></thead><tbody>
+          ${monthRows.map(r=>`<tr><td>${r.label}</td><td>${r.days}</td><td>${r.n}</td><td>${money(r.cash)}</td><td>${money(r.card)}</td><td ${R}>${money(r.rev)}</td></tr>`).join("")}
+          ${monthRows.length > 1 ? `<tr style="font-weight:700;"><td>Total</td><td>${monthRows.reduce((t,r)=>t+r.days,0)}</td><td>${sumOf(monthRows).n}</td><td>${money(sumOf(monthRows).cash)}</td><td>${money(sumOf(monthRows).card)}</td><td ${R}>${money(sumOf(monthRows).rev)}</td></tr>` : ""}
+        </tbody></table>
+      </div>
+
       <div class="an-sec"><h4>🧾 Sales by product</h4>
         <table><thead><tr><th>Product</th><th>Qty</th><th style="text-align:right;">Sales</th><th style="text-align:right;">Share</th></tr></thead><tbody>
           ${products.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td style="text-align:right;">${money(p.rev)}</td><td style="text-align:right;">${pct(p.rev, products.reduce((t,x)=>t+x.rev,0))}</td></tr>`).join("")}
@@ -2229,8 +2272,8 @@ function renderAnalyticsPanel(el, isDev){
       </div>
 
       ${options.length ? `<div class="an-sec"><h4>🧩 Add-on options (radio &amp; checkbox choices)</h4>
-        <table><thead><tr><th>Option</th><th>Choice</th><th>Qty</th><th style="text-align:right;">Extra sales</th></tr></thead><tbody>
-          ${options.map(o=>`<tr><td>${esc(o.group)}</td><td>${esc(o.label)}</td><td>${o.qty}</td><td style="text-align:right;">${o.rev>0 ? money(o.rev) : "—"}</td></tr>`).join("")}
+        <table><thead><tr><th>Drink</th><th>Option</th><th>Choice</th><th>Qty</th><th style="text-align:right;">Extra sales</th></tr></thead><tbody>
+          ${options.map(o=>`<tr><td>${esc(o.drink)}</td><td>${esc(o.group)}</td><td>${esc(o.label)}</td><td>${o.qty}</td><td style="text-align:right;">${o.rev>0 ? money(o.rev) : "—"}</td></tr>`).join("")}
         </tbody></table>
       </div>` : ""}
 
@@ -2289,14 +2332,28 @@ function renderAnalyticsPanel(el, isDev){
     rows.push(["Hour", "Transactions", "Sales"]);
     hList.forEach(h=>{ const v = a.byHour[h] || { n:0, rev:0 }; rows.push([String(h).padStart(2,"0") + ":00", v.n, v.rev]); });
     blank();
+    rows.push(["Sales by day"]);
+    rows.push(["Date", "Day", "Transactions", "Cash", "Card", "Total"]);
+    dayRows.forEach(r=>rows.push([fmtDate(r.date), r.wd, r.n, r.cash, r.card, r.rev]));
+    if(dayRows.length > 1){ const t = sumOf(dayRows); rows.push(["Total", "", t.n, t.cash, t.card, t.rev]); }
+    blank();
+    rows.push(["Sales by day of week"]);
+    rows.push(["Day", "Days counted", "Transactions", "Cash", "Card", "Total", "Average per day"]);
+    wdRows.forEach(r=>rows.push([r.name, r.days, r.n, r.cash, r.card, r.rev, r.days ? Math.round(r.rev / r.days * 100) / 100 : ""]));
+    blank();
+    rows.push(["Sales by month"]);
+    rows.push(["Month", "Days counted", "Transactions", "Cash", "Card", "Total"]);
+    monthRows.forEach(r=>rows.push([r.label, r.days, r.n, r.cash, r.card, r.rev]));
+    if(monthRows.length > 1){ const t = sumOf(monthRows); rows.push(["Total", monthRows.reduce((x,r)=>x+r.days,0), t.n, t.cash, t.card, t.rev]); }
+    blank();
     rows.push(["Sales by product"]);
     rows.push(["Product", "Qty", "Sales", "Share"]);
     products.forEach(p=>rows.push([p.name, p.qty, p.rev, pct(p.rev, prodTotal)]));
     if(options.length){
       blank();
       rows.push(["Add-on options (radio & checkbox choices)"]);
-      rows.push(["Option", "Choice", "Qty", "Extra sales"]);
-      options.forEach(o=>rows.push([o.group, o.label, o.qty, o.rev]));
+      rows.push(["Drink", "Option", "Choice", "Qty", "Extra sales"]);
+      options.forEach(o=>rows.push([o.drink, o.group, o.label, o.qty, o.rev]));
     }
     blank();
     rows.push(["Sales by cashier"]);
